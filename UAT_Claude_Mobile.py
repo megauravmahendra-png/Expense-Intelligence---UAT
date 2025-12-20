@@ -80,10 +80,13 @@ def format_month(m):
 def get_chart_config():
     """Returns Plotly config optimized for mobile touch screens"""
     return {
-        'displayModeBar': False,  # Hide the toolbar
-        'scrollZoom': False,      # Disable zoom on scroll/pinch
-        'doubleClick': False,     # Disable double-click zoom
-        'dragMode': False         # Disable pan/drag
+        'displayModeBar': False,     # Hide the toolbar
+        'scrollZoom': False,         # Disable zoom on scroll/pinch
+        'doubleClick': False,        # Disable double-click zoom
+        'dragMode': False,           # Disable pan/drag
+        'staticPlot': False,         # Keep interactivity for tooltips
+        'displaylogo': False,        # Remove Plotly logo
+        'modeBarButtonsToRemove': ['zoom', 'pan', 'select', 'lasso', 'zoomIn', 'zoomOut', 'autoScale', 'resetScale']
     }
 
 WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
@@ -178,21 +181,17 @@ with tab1:
     
     with c2:
         monthly = df.groupby("Month")[amt_col].sum().reset_index()
-        st.plotly_chart(
-            px.line(monthly, x="Month", y=amt_col, markers=True,
-                    template="plotly_dark", title="Total Monthly Spend"),
-            use_container_width=True,
-            config=get_chart_config()
-        )
+        fig = px.line(monthly, x="Month", y=amt_col, markers=True,
+                template="plotly_dark", title="Total Monthly Spend")
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     with c1:
         cat_trend = df.groupby(["Month","Category"])[amt_col].sum().reset_index()
-        st.plotly_chart(
-            px.line(cat_trend, x="Month", y=amt_col, color="Category",
-                    template="plotly_dark", title="Category-wise Trend"),
-            use_container_width=True,
-            config=get_chart_config()
-        )
+        fig = px.line(cat_trend, x="Month", y=amt_col, color="Category",
+                template="plotly_dark", title="Category-wise Trend")
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
 # =========================================================
 # TAB 2 — MONTHLY VIEW
@@ -240,46 +239,41 @@ with tab2:
             x=pd.date_range(daily["Date"].min(), periods=days),
             y=ideal, name="Ideal"
         )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     with right:
         st.markdown("#### 🧩 Expense Composition")
-        st.plotly_chart(
-            px.treemap(
-                month_df,
-                path=["Category","Sub Category"],
-                values=amt_col,
-                template="plotly_dark"
-            ),
-            use_container_width=True,
-            config=get_chart_config()
+        fig = px.treemap(
+            month_df,
+            path=["Category","Sub Category"],
+            values=amt_col,
+            template="plotly_dark"
         )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     # Category vs Day
     st.markdown("#### 📆 Spending Pattern")
     c1,c2 = st.columns(2)
     
     with c1:
-        st.plotly_chart(
-            px.bar(
-                month_df.groupby("Category")[amt_col].sum().reset_index(),
-                x="Category", y=amt_col,
-                template="plotly_dark", title="Category vs Amount"
-            ),
-            use_container_width=True,
-            config=get_chart_config()
+        fig = px.bar(
+            month_df.groupby("Category")[amt_col].sum().reset_index(),
+            x="Category", y=amt_col,
+            template="plotly_dark", title="Category vs Amount"
         )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     with c2:
-        st.plotly_chart(
-            px.bar(
-                month_df.groupby(date_col)[amt_col].sum().reset_index(),
-                x=date_col, y=amt_col,
-                template="plotly_dark", title="Amount vs Day"
-            ),
-            use_container_width=True,
-            config=get_chart_config()
+        fig = px.bar(
+            month_df.groupby(date_col)[amt_col].sum().reset_index(),
+            x=date_col, y=amt_col,
+            template="plotly_dark", title="Amount vs Day"
         )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     # =====================================================
     # Weekday vs Weekend Behaviour 
@@ -322,21 +316,17 @@ with tab2:
     c1,c2 = st.columns([2.2,1])
     
     with c1:
-        st.plotly_chart(
-            px.bar(day_metric, x="Weekday", y=amt_col, template="plotly_dark",
-                   title=f"{metric} by Day"),
-            use_container_width=True,
-            config=get_chart_config()
-        )
+        fig = px.bar(day_metric, x="Weekday", y=amt_col, template="plotly_dark",
+               title=f"{metric} by Day")
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     with c2:
-        st.plotly_chart(
-            px.bar(filtered.groupby("WeekType")[amt_col].mean().reset_index(),
-                   x="WeekType", y=amt_col, template="plotly_dark",
-                   title="Weekday vs Weekend"),
-            use_container_width=True,
-            config=get_chart_config()
-        )
+        fig = px.bar(filtered.groupby("WeekType")[amt_col].mean().reset_index(),
+               x="WeekType", y=amt_col, template="plotly_dark",
+               title="Weekday vs Weekend")
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
 # =========================================================
 # TAB 3 — INTELLIGENCE
