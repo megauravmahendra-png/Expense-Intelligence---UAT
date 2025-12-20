@@ -17,13 +17,11 @@ st.set_page_config(
 )
 
 # =========================================================
-# MOBILE-OPTIMIZED UI THEME
+# UI THEME
 # =========================================================
 st.markdown("""
 <style>
 body { background:#0b1220; color:#e5e7eb; }
-
-/* Responsive containers */
 .section-box {
     background:#0f172a;
     border:1px solid #1e293b;
@@ -31,110 +29,30 @@ body { background:#0b1220; color:#e5e7eb; }
     padding:22px;
     margin-bottom:24px;
 }
-
 .card {
     background:#111827;
     border:1px solid #1f2937;
     border-radius:16px;
     padding:18px;
     transition:0.25s;
-    margin-bottom:16px;
 }
-
 .card:hover {
     transform:translateY(-4px);
     box-shadow:0 10px 24px rgba(0,0,0,0.35);
 }
-
 .kpi-title {
-    font-size:0.75rem;
+    font-size:0.7rem;
     letter-spacing:0.08em;
     color:#9ca3af;
     text-transform:uppercase;
-    margin-bottom:8px;
 }
-
 .kpi-value {
     font-size:1.8rem;
     font-weight:700;
-    word-break:break-word;
 }
-
 .subtle {
     color:#9ca3af;
     font-size:0.85rem;
-}
-
-/* Mobile optimizations */
-@media (max-width: 768px) {
-    .kpi-title {
-        font-size:0.7rem;
-    }
-    
-    .kpi-value {
-        font-size:1.5rem;
-    }
-    
-    .card {
-        padding:14px;
-        margin-bottom:12px;
-    }
-    
-    .section-box {
-        padding:16px;
-        margin-bottom:16px;
-        border-radius:12px;
-    }
-    
-    /* Make text more readable on mobile */
-    body {
-        font-size:16px !important;
-    }
-    
-    h1, h2, h3, h4 {
-        font-size:1.3rem !important;
-        line-height:1.4 !important;
-    }
-    
-    /* Increase touch targets */
-    button, .stButton button {
-        min-height:44px !important;
-        padding:12px 20px !important;
-        font-size:16px !important;
-    }
-    
-    /* Better input fields */
-    input, select, .stSelectbox, .stNumberInput {
-        font-size:16px !important;
-        min-height:44px !important;
-    }
-    
-    /* Sidebar improvements */
-    section[data-testid="stSidebar"] {
-        width:85% !important;
-        max-width:300px !important;
-    }
-    
-    /* Better spacing for mobile */
-    .block-container {
-        padding-left:1rem !important;
-        padding-right:1rem !important;
-        padding-top:1rem !important;
-    }
-}
-
-/* Better touch targets for all screen sizes */
-.stCheckbox {
-    min-height:44px;
-    display:flex;
-    align-items:center;
-}
-
-/* Improve popover on mobile */
-@media (max-width: 768px) {
-    [data-testid="stPopover"] {
-        font-size:16px !important;
-    }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -158,6 +76,15 @@ def detect(df, keys):
 
 def format_month(m):
     return pd.to_datetime(m + "-01").strftime("%B %y")
+
+def get_chart_config():
+    """Returns Plotly config optimized for mobile touch screens"""
+    return {
+        'displayModeBar': False,  # Hide the toolbar
+        'scrollZoom': False,      # Disable zoom on scroll/pinch
+        'doubleClick': False,     # Disable double-click zoom
+        'dragMode': False         # Disable pan/drag
+    }
 
 WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 
@@ -237,13 +164,13 @@ non_bill_df = month_df[month_df["Category"] != "Bill Payment"]
 # =========================================================
 tab1, tab2, tab3, tab4 = st.tabs([
     "📈 Trends",
-    "📅 Monthly",
-    "🧠 Intel",
+    "📅 Monthly View",
+    "🧠 Intelligence",
     "📤 Export"
 ])
 
 # =========================================================
-# TAB 1 — TRENDS (RESPONSIVE LAYOUT)
+# TAB 1 — TRENDS (SIDE-BY-SIDE)
 # =========================================================
 with tab1:
     st.markdown("### 📈 Long-term Trends")
@@ -251,50 +178,46 @@ with tab1:
     
     with c2:
         monthly = df.groupby("Month")[amt_col].sum().reset_index()
-        fig1 = px.line(monthly, x="Month", y=amt_col, markers=True,
-                       template="plotly_dark", title="Total Monthly Spend")
-        fig1.update_layout(dragmode=False)
         st.plotly_chart(
-            fig1,
+            px.line(monthly, x="Month", y=amt_col, markers=True,
+                    template="plotly_dark", title="Total Monthly Spend"),
             use_container_width=True,
-            config={'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False}
+            config=get_chart_config()
         )
     
     with c1:
         cat_trend = df.groupby(["Month","Category"])[amt_col].sum().reset_index()
-        fig2 = px.line(cat_trend, x="Month", y=amt_col, color="Category",
-                       template="plotly_dark", title="Category-wise Trend")
-        fig2.update_layout(dragmode=False)
         st.plotly_chart(
-            fig2,
+            px.line(cat_trend, x="Month", y=amt_col, color="Category",
+                    template="plotly_dark", title="Category-wise Trend"),
             use_container_width=True,
-            config={'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False}
+            config=get_chart_config()
         )
 
 # =========================================================
-# TAB 2 — MONTHLY VIEW (MOBILE OPTIMIZED)
+# TAB 2 — MONTHLY VIEW
 # =========================================================
 with tab2:
-    st.markdown(f"### 📅 {format_month(selected_month)}")
+    st.markdown(f"### 📅 {format_month(selected_month)} Overview")
     
-    # KPIs - 4 columns on desktop, auto-stack on mobile
-    k1, k2, k3, k4 = st.columns(4)
-    kpis_data = [
-        (k1, "Total Spend", month_df[amt_col].sum()),
-        (k2, "Excl. Bills", non_bill_df[amt_col].sum()),
-        (k3, "Daily Avg", non_bill_df.groupby(date_col)[amt_col].sum().mean()),
-        (k4, "Top Category", non_bill_df.groupby("Category")[amt_col].sum().idxmax())
+    # KPIs
+    k1,k2,k3,k4 = st.columns(4)
+    kpis = [
+        (k1,"Total Spend",month_df[amt_col].sum()),
+        (k2,"Excl. Bills",non_bill_df[amt_col].sum()),
+        (k3,"Daily Avg",non_bill_df.groupby(date_col)[amt_col].sum().mean()),
+        (k4,"Top Category",non_bill_df.groupby("Category")[amt_col].sum().idxmax())
     ]
-    
-    for col, title, val in kpis_data:
+    for col,title,val in kpis:
         display = f"₹{val:,.0f}" if isinstance(val,(int,float,np.number)) else str(val)
         col.markdown(
             f"<div class='card'><div class='kpi-title'>{title}</div><div class='kpi-value'>{display}</div></div>",
             unsafe_allow_html=True
         )
     
-    # Budget + Composition - side by side on desktop
-    left, right = st.columns([1.4, 1])
+    # Budget + Composition
+    left,right = st.columns([1.4,1])
+    
     with left:
         st.markdown("#### 📉 Budget Burn-down")
         budget = st.number_input("Monthly Budget", value=30000, step=1000)
@@ -317,54 +240,53 @@ with tab2:
             x=pd.date_range(daily["Date"].min(), periods=days),
             y=ideal, name="Ideal"
         )
-        fig.update_layout(dragmode=False)
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False})
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     with right:
         st.markdown("#### 🧩 Expense Composition")
-        treemap_fig = px.treemap(
-            month_df,
-            path=["Category","Sub Category"],
-            values=amt_col,
-            template="plotly_dark"
-        )
-        treemap_fig.update_layout(dragmode=False)
-        st.plotly_chart(treemap_fig, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False})
-    
-    # Category vs Day - side by side on desktop
-    st.markdown("#### 📆 Spending Pattern")
-    c1, c2 = st.columns(2)
-    with c1:
-        fig_cat = px.bar(
-            month_df.groupby("Category")[amt_col].sum().reset_index(),
-            x="Category", y=amt_col,
-            template="plotly_dark", title="Category vs Amount"
-        )
-        fig_cat.update_layout(dragmode=False)
         st.plotly_chart(
-            fig_cat,
+            px.treemap(
+                month_df,
+                path=["Category","Sub Category"],
+                values=amt_col,
+                template="plotly_dark"
+            ),
             use_container_width=True,
-            config={'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False}
+            config=get_chart_config()
+        )
+    
+    # Category vs Day
+    st.markdown("#### 📆 Spending Pattern")
+    c1,c2 = st.columns(2)
+    
+    with c1:
+        st.plotly_chart(
+            px.bar(
+                month_df.groupby("Category")[amt_col].sum().reset_index(),
+                x="Category", y=amt_col,
+                template="plotly_dark", title="Category vs Amount"
+            ),
+            use_container_width=True,
+            config=get_chart_config()
         )
     
     with c2:
-        fig_day = px.bar(
-            month_df.groupby(date_col)[amt_col].sum().reset_index(),
-            x=date_col, y=amt_col,
-            template="plotly_dark", title="Amount vs Day"
-        )
-        fig_day.update_layout(dragmode=False)
         st.plotly_chart(
-            fig_day,
+            px.bar(
+                month_df.groupby(date_col)[amt_col].sum().reset_index(),
+                x=date_col, y=amt_col,
+                template="plotly_dark", title="Amount vs Day"
+            ),
             use_container_width=True,
-            config={'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False}
+            config=get_chart_config()
         )
     
     # =====================================================
     # Weekday vs Weekend Behaviour 
     # =====================================================
+    
     st.markdown("### 📅 Weekday vs Weekend Behaviour")
-    f1, f2, f3 = st.columns([1.2, 1.2, 1])
+    f1,f2,f3 = st.columns([1.2,1.2,1])
     
     with f1:
         with st.popover("Filter Category"):
@@ -394,28 +316,26 @@ with tab2:
             filtered.groupby([date_col,"Weekday"])[amt_col].sum()
             .reset_index().groupby("Weekday")[amt_col].mean()
         )
+    
     day_metric = day_metric.reindex(WEEK_ORDER).reset_index()
     
-    c1, c2 = st.columns([2.2, 1])
+    c1,c2 = st.columns([2.2,1])
+    
     with c1:
-        fig_weekday = px.bar(day_metric, x="Weekday", y=amt_col, template="plotly_dark",
-                             title=f"{metric} by Day")
-        fig_weekday.update_layout(dragmode=False)
         st.plotly_chart(
-            fig_weekday,
+            px.bar(day_metric, x="Weekday", y=amt_col, template="plotly_dark",
+                   title=f"{metric} by Day"),
             use_container_width=True,
-            config={'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False}
+            config=get_chart_config()
         )
     
     with c2:
-        fig_weektype = px.bar(filtered.groupby("WeekType")[amt_col].mean().reset_index(),
-                              x="WeekType", y=amt_col, template="plotly_dark",
-                              title="Weekday vs Weekend")
-        fig_weektype.update_layout(dragmode=False)
         st.plotly_chart(
-            fig_weektype,
+            px.bar(filtered.groupby("WeekType")[amt_col].mean().reset_index(),
+                   x="WeekType", y=amt_col, template="plotly_dark",
+                   title="Weekday vs Weekend"),
             use_container_width=True,
-            config={'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False}
+            config=get_chart_config()
         )
 
 # =========================================================
@@ -432,25 +352,23 @@ with tab3:
         .reset_index()
     )
     recurring = recurring[(recurring["count"]>=3)&((recurring["std"]/recurring["mean"])<0.1)]
-    st.dataframe(recurring, use_container_width=True, height=300)
+    st.dataframe(recurring, use_container_width=True)
     
     st.markdown("#### 🚨 Large Expenses (> ₹3000)")
     alerts = df[(df["Category"]!="Bill Payment")&(df[amt_col]>3000)]
-    st.dataframe(alerts[[date_col,"Description",amt_col]], use_container_width=True, height=300)
+    st.dataframe(alerts[[date_col,"Description",amt_col]], use_container_width=True)
 
 # =========================================================
 # TAB 4 — EXPORT
 # =========================================================
 with tab4:
-    st.markdown("### 📤 Export Data")
     buf = BytesIO()
     df.sort_values(date_col).to_excel(buf, index=False)
     buf.seek(0)
     st.download_button(
-        "⬇️ Download Clean Excel",
+        "Download Clean Excel",
         data=buf,
-        file_name="expense_intelligence_clean.xlsx",
-        use_container_width=True
+        file_name="expense_intelligence_clean.xlsx"
     )
 
 st.markdown("---")
