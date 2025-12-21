@@ -292,10 +292,15 @@ with tab2:
             template="plotly_dark"
         )
 
-      # NEW: Update traces to show Label, Formatted Amount, and Percentage
+      # # NEW: Update traces to show Label, Formatted Amount, and Percentage
+      #   fig.update_traces(
+      #       textinfo="label+value+percent parent",
+      #       texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentParent:.1%}"
+      #   )
+        # CHANGED: Used percentRoot instead of percentParent
         fig.update_traces(
-            textinfo="label+value+percent parent",
-            texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentParent:.1%}"
+            textinfo="label+value+percent root",
+            texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
         )
       
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
