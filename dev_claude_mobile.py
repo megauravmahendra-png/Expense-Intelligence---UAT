@@ -492,57 +492,66 @@ with tab2:
             'Uncategorized': '#6b7280'
         }
         
-        # Prepare treemap data
-        treemap_data = month_df.copy()
-        total_amount = treemap_data[amt_col].sum()
+        # Calculate totals
+        total_amount = month_df[amt_col].sum()
+        cat_summary = month_df.groupby('Category')[amt_col].sum().reset_index()
+        cat_summary['Percentage'] = (cat_summary[amt_col] / total_amount * 100).round(1)
         
-        # Calculate category totals and percentages
-        cat_totals = treemap_data.groupby('Category')[amt_col].sum()
+        # Create subcategory summary
+        sub_summary = month_df.groupby(['Category', 'Sub Category'])[amt_col].sum().reset_index()
         
-        # Assign colors based on category
-        treemap_data['Color'] = treemap_data['Category'].map(
-            lambda x: category_colors.get(x, '#64748b')
+        # Calculate percentages for subcategories
+        sub_summary = sub_summary.merge(
+            cat_summary[['Category', amt_col]].rename(columns={amt_col: 'CategoryTotal'}),
+            on='Category'
+        )
+        sub_summary['PctOfCategory'] = (sub_summary[amt_col] / sub_summary['CategoryTotal'] * 100).round(1)
+        sub_summary['PctOfTotal'] = (sub_summary[amt_col] / total_amount * 100).round(1)
+        
+        # Build custom text for each level
+        cat_summary['labels'] = cat_summary.apply(
+            lambda x: f"<b>{x['Category']}</b><br>₹{x[amt_col]:,.0f}<br>{x['Percentage']:.1f}% of total",
+            axis=1
         )
         
-        # Create custom labels with amount and percentage
-        def create_label(row):
-            cat_total = cat_totals.get(row['Category'], 0)
-            cat_pct = (cat_total / total_amount * 100) if total_amount > 0 else 0
-            sub_pct = (row[amt_col] / cat_total * 100) if cat_total > 0 else 0
-            
-            # For category level
-            if row['Sub Category'] == row['Category']:
-                return f"{row['Category']}<br>₹{cat_total:,.0f}<br>{cat_pct:.1f}% of total"
-            # For subcategory level
-            else:
-                return f"{row['Sub Category']}<br>₹{row[amt_col]:,.0f}<br>{sub_pct:.1f}% of {row['Category']}<br>{(row[amt_col]/total_amount*100):.1f}% of total"
-        
-        treemap_data['CustomLabel'] = treemap_data.apply(create_label, axis=1)
+        sub_summary['labels'] = sub_summary.apply(
+            lambda x: f"<b>{x['Sub Category']}</b><br>₹{x[amt_col]:,.0f}<br>{x['PctOfCategory']:.1f}% of {x['Category']}<br>{x['PctOfTotal']:.1f}% of total",
+            axis=1
+        )
         
         fig = px.treemap(
-            treemap_data,
-            path=["Category", "Sub Category"],
+            sub_summary,
+            path=['Category', 'Sub Category'],
             values=amt_col,
             color='Category',
             color_discrete_map=category_colors,
-            template="plotly_dark"
+            template="plotly_dark",
+            custom_data=['labels']
         )
         
         fig.update_traces(
+            texttemplate='%{customdata[0]}',
             textposition="middle center",
-            textfont=dict(size=11, color='white', family='Arial'),
+            textfont=dict(size=10, color='white', family='Arial Black'),
             marker=dict(
-                line=dict(width=2.5, color='#0f172a'),
+                line=dict(width=3, color='#0f172a'),
                 cornerradius=5
             ),
-            hovertemplate='<b>%{label}</b><br>Amount: ₹%{value:,.0f}<br>%{percentParent}<extra></extra>'
+            hovertemplate='<b>%{label}</b><br>₹%{value:,.0f}<extra></extra>',
+            root_color="#111827"
         )
         
         fig.update_layout(
             xaxis_fixedrange=True, 
             yaxis_fixedrange=True,
             margin=dict(t=10, b=10, l=10, r=10),
-            uniformtext=dict(minsize=8, mode='hide')
+            uniformtext=dict(minsize=7, mode='hide'),
+            treemapcolorway=list(category_colors.values())
+        )
+        
+        # Enable click to drill down (first click shows category, second click shows subcategory)
+        fig.update_traces(
+            branchvalues="total"
         )
         
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
