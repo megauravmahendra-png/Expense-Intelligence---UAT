@@ -475,83 +475,78 @@ with tab2:
     with right:
         st.markdown("#### 🧩 Expense Composition")
         
-        # Define fixed colors for each category
+        # Define vibrant, happy colors for each category
         category_colors = {
-            'Food & Dining': '#ef4444',
-            'Shopping': '#f59e0b',
-            'Transportation': '#3b82f6',
-            'Entertainment': '#8b5cf6',
-            'Bills & Utilities': '#10b981',
-            'Healthcare': '#ec4899',
-            'Education': '#06b6d4',
-            'Personal Care': '#f97316',
-            'Travel': '#14b8a6',
-            'Investments': '#6366f1',
-            'Others': '#64748b',
-            'Bill Payment': '#059669',
-            'Uncategorized': '#6b7280'
+            'Food & Dining': '#FF6B6B',      # Bright coral red
+            'Shopping': '#FFD93D',           # Sunny yellow
+            'Transportation': '#6BCF7F',     # Fresh green
+            'Entertainment': '#A78BFA',      # Vibrant purple
+            'Bills & Utilities': '#4ECDC4',  # Turquoise
+            'Healthcare': '#FF8787',         # Soft pink-red
+            'Education': '#74C0FC',          # Sky blue
+            'Personal Care': '#FFA94D',      # Warm orange
+            'Travel': '#51CF66',             # Lime green
+            'Investments': '#845EF7',        # Royal purple
+            'Others': '#94A3B8',             # Soft gray
+            'Bill Payment': '#20C997',       # Mint green
+            'Uncategorized': '#ADB5BD'       # Light gray
         }
         
         # Calculate totals
         total_amount = month_df[amt_col].sum()
-        cat_summary = month_df.groupby('Category')[amt_col].sum().reset_index()
-        cat_summary['Percentage'] = (cat_summary[amt_col] / total_amount * 100).round(1)
         
-        # Create subcategory summary
-        sub_summary = month_df.groupby(['Category', 'Sub Category'])[amt_col].sum().reset_index()
+        # Create a proper hierarchical structure
+        treemap_data = []
         
-        # Calculate percentages for subcategories
-        sub_summary = sub_summary.merge(
-            cat_summary[['Category', amt_col]].rename(columns={amt_col: 'CategoryTotal'}),
-            on='Category'
-        )
-        sub_summary['PctOfCategory'] = (sub_summary[amt_col] / sub_summary['CategoryTotal'] * 100).round(1)
-        sub_summary['PctOfTotal'] = (sub_summary[amt_col] / total_amount * 100).round(1)
+        # Add categories
+        for cat in month_df['Category'].unique():
+            cat_data = month_df[month_df['Category'] == cat]
+            cat_total = cat_data[amt_col].sum()
+            cat_pct = (cat_total / total_amount * 100)
+            
+            # Add subcategories
+            for sub in cat_data['Sub Category'].unique():
+                sub_data = cat_data[cat_data['Sub Category'] == sub]
+                sub_total = sub_data[amt_col].sum()
+                sub_pct_of_cat = (sub_total / cat_total * 100)
+                sub_pct_of_total = (sub_total / total_amount * 100)
+                
+                treemap_data.append({
+                    'Category': cat,
+                    'Sub Category': sub,
+                    'Amount': sub_total,
+                    'cat_label': f"{cat}\n₹{cat_total:,.0f}\n{cat_pct:.1f}% of total",
+                    'sub_label': f"{sub}\n₹{sub_total:,.0f}\n{sub_pct_of_cat:.1f}% of {cat}\n{sub_pct_of_total:.1f}% of total"
+                })
         
-        # Build custom text for each level
-        cat_summary['labels'] = cat_summary.apply(
-            lambda x: f"<b>{x['Category']}</b><br>₹{x[amt_col]:,.0f}<br>{x['Percentage']:.1f}% of total",
-            axis=1
-        )
-        
-        sub_summary['labels'] = sub_summary.apply(
-            lambda x: f"<b>{x['Sub Category']}</b><br>₹{x[amt_col]:,.0f}<br>{x['PctOfCategory']:.1f}% of {x['Category']}<br>{x['PctOfTotal']:.1f}% of total",
-            axis=1
-        )
+        treemap_df = pd.DataFrame(treemap_data)
         
         fig = px.treemap(
-            sub_summary,
+            treemap_df,
             path=['Category', 'Sub Category'],
-            values=amt_col,
+            values='Amount',
             color='Category',
             color_discrete_map=category_colors,
-            template="plotly_dark",
-            custom_data=['labels']
+            template="plotly_dark"
         )
         
+        # Update text display
         fig.update_traces(
-            texttemplate='%{customdata[0]}',
             textposition="middle center",
-            textfont=dict(size=10, color='white', family='Arial Black'),
+            textfont=dict(size=11, color='white', family='Arial'),
             marker=dict(
-                line=dict(width=3, color='#0f172a'),
+                line=dict(width=3, color='#1e293b'),
                 cornerradius=5
             ),
             hovertemplate='<b>%{label}</b><br>₹%{value:,.0f}<extra></extra>',
-            root_color="#111827"
+            texttemplate="<b>%{label}</b><br>₹%{value:,.0f}",
         )
         
         fig.update_layout(
             xaxis_fixedrange=True, 
             yaxis_fixedrange=True,
             margin=dict(t=10, b=10, l=10, r=10),
-            uniformtext=dict(minsize=7, mode='hide'),
-            treemapcolorway=list(category_colors.values())
-        )
-        
-        # Enable click to drill down (first click shows category, second click shows subcategory)
-        fig.update_traces(
-            branchvalues="total"
+            uniformtext=dict(minsize=8, mode='hide')
         )
         
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
