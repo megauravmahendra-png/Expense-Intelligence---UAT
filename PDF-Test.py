@@ -8,7 +8,7 @@ from io import BytesIO
 def extract_gpay_transactions(pdf_file):
     """
     Extract transaction data from GPay PDF statement
-    Format: Date & time | Transaction details | Amount
+    Uses regex pattern matching on the entire text
     """
     
     # Read PDF
@@ -21,86 +21,54 @@ def extract_gpay_transactions(pdf_file):
     
     transactions = []
     
-    # Split into lines
-    lines = all_text.split('\n')
+    # Debug: Show first 500 chars
+    st.write("**PDF Text Preview:**")
+    st.code(all_text[:1000])
     
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        
-        # Pattern: "DD MMM, YYYY" or "DD MMM, YYYY\nHH:MM AM/PM"
-        date_pattern = r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec),?\s+\d{4})'
-        
-        if re.match(date_pattern, line):
-            try:
-                # Get date
-                date_str = line
-                
-                # Get time (next line)
-                i += 1
-                time_str = lines[i].strip() if i < len(lines) else ""
-                
-                # Get transaction details (next line)
-                i += 1
-                description = lines[i].strip() if i < len(lines) else ""
-                
-                # Skip UPI Transaction ID line
-                i += 1
-                if i < len(lines) and "UPI Transaction ID" in lines[i]:
-                    i += 1
-                
-                # Skip "Paid by/to" line
-                if i < len(lines) and ("Paid by" in lines[i] or "Paid to" in lines[i]):
-                    i += 1
-                
-                # Get amount (should be on current line)
-                amount_line = lines[i].strip() if i < len(lines) else ""
-                
-                # Extract amount using pattern ₹X,XXX or ₹XXX.XX
-                amount_match = re.search(r'₹\s*([\d,]+\.?\d*)', amount_line)
-                
-                if amount_match:
-                    amount_str = amount_match.group(1).replace(',', '')
-                    amount = float(amount_str)
-                    
-                    # Parse date
-                    try:
-                        # Handle both "01 Jun, 2025" and "01 Jun 2025"
-                        date_clean = date_str.replace(',', '').strip()
-                        date = datetime.strptime(date_clean, '%d %b %Y')
-                    except:
-                        i += 1
-                        continue
-                    
-                    # Clean description (remove "Paid to" or "Received from")
-                    description = description.replace('Paid to ', '').replace('Received from ', '').strip()
-                    
-                    # Skip if it's a reward, self-transfer, or Google Pay related
-                    skip_keywords = ['Google Pay rewards', 'Self transfer']
-                    if any(keyword in description for keyword in skip_keywords):
-                        i += 1
-                        continue
-                    
-                    # Determine if it's income or expense
-                    transaction_type = 'Expense'
-                    if 'Received from' in lines[i-3] if i >= 3 else False:
-                        transaction_type = 'Income'
-                    
-                    # Auto-categorize
-                    category, sub_category = auto_categorize(description)
-                    
-                    transactions.append({
-                        'Date': date,
-                        'Description': description,
-                        'Amount': amount,
-                        'Type': transaction_type,
-                        'Category': category,
-                        'Sub Category': sub_category
-                    })
-            except Exception as e:
-                pass
-        
-        i += 1
+    # Pattern to match GPay transactions
+    # Format: DD MMM, YYYY\nHH:MM AM/PM\nPaid to NAME\nUPI Transaction ID: XXX\nPaid by Bank XXX\n₹AMOUNT
+    
+    # More flexible pattern - match date, description, and amount
+    pattern = r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec),?\s+\d{4}).*?(?:Paid to|Received from)\s+(.+?)(?:\n|UPI).*?₹\s*([\d,]+\.?\d*)'
+    
+    matches = re.findall(pattern, all_text, re.DOTALL | re.MULTILINE)
+    
+    st.write(f"**Found {len(matches)} potential transactions**")
+    
+    for match in matches:
+        try:
+            date_str, description, amount_str = match
+            
+            # Parse date
+            date_clean = date_str.replace(',', '').strip()
+            date = datetime.strptime(date_clean, '%d %b %Y')
+            
+            # Clean amount
+            amount = float(amount_str.replace(',', ''))
+            
+            # Clean description - take first line only
+            description = description.split('\n')[0].strip()
+            
+            # Skip rewards and self-transfers
+            skip_keywords = ['Google Pay rewards', 'Self transfer', 'Google Play']
+            if any(keyword in description for keyword in skip_keywords):
+                continue
+            
+            # Auto-categorize
+            category, sub_category = auto_categorize(description)
+            
+            transactions.append({
+                'Date': date,
+                'Description': description,
+                'Amount': amount,
+                'Type': 'Expense',
+                'Category': category,
+                'Sub Category': sub_category
+            })
+            
+        except Exception as e:
+            st.write(f"Error parsing: {e}")
+            continue
     
     # Create DataFrame
     df = pd.DataFrame(transactions)
@@ -254,7 +222,20 @@ if uploaded_pdf:
                 st.markdown("### 💾 Download Excel")
                 
                 buffer = BytesIO()
-                edited_df.to_excel(buffer, index=False)
+                # Format the data to match your dashboard's expected format
+                export_df = edited_df.copy()
+                export_df = export_df.rename(columns={
+                    'Date': 'Date',
+                    'Description': 'Description',
+                    'Amount': 'Amount',
+                    'Category': 'Category',
+                    'Sub Category': 'Sub Category'
+                })
+                # Keep only expense transactions for the dashboard
+                export_df = export_df[export_df['Type'] == 'Expense']
+                export_df = export_df[['Date', 'Description', 'Amount', 'Category', 'Sub Category']]
+                
+                export_df.to_excel(buffer, index=False)
                 buffer.seek(0)
                 
                 filename = f"gpay_transactions_{df['Date'].min().strftime('%Y%m')}_to_{df['Date'].max().strftime('%Y%m')}.xlsx"
