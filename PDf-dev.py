@@ -124,32 +124,32 @@ def extract_gpay_transactions_from_pdf(pdf_file):
     return df
 
 def categorize_transaction(description, amount, logic_sheet_df):
-    """Categorize transaction using fuzzy matching and heuristics"""
+    """Categorize transaction using smart fuzzy matching"""
     
     # 1. Fuzzy Matching against Logic Sheet
     if not logic_sheet_df.empty and fuzz is not None:
         best_match_score = 0
         best_match_row = None
         
-        # Ensure we are working with strings
+        # Lowercase description for better matching
         desc_search = str(description).lower()
         
         for idx, row in logic_sheet_df.iterrows():
-            # Force string conversion to avoid errors with numbers in Merchant column
+            # Force string conversion
             merchant = str(row.get('Merchant', '')).strip().lower()
             
             if not merchant:
                 continue
             
-            # Fuzzy match
-            score = fuzz.partial_ratio(desc_search, merchant)
+            # Use TOKEN SET RATIO (Best for partial matches like "Uber Rides" matching "Uber")
+            score = fuzz.token_set_ratio(desc_search, merchant)
             
             if score > best_match_score:
                 best_match_score = score
                 best_match_row = row
         
-        # If match is strong enough (>80%), use it
-        if best_match_score >= 80 and best_match_row is not None:
+        # Threshold set to 70 (Less strict)
+        if best_match_score >= 70 and best_match_row is not None:
             sub_cat = str(best_match_row.get('Subcategory', 'Yet to Name'))
             return (
                 str(best_match_row.get('Category', 'Misc')),
@@ -542,7 +542,26 @@ def load_logic_sheet(link):
         with st.sidebar.expander("🐞 Logic Sheet Status", expanded=True):
             if len(found_cols) == len(required_cols):
                 st.success(f"✅ Loaded {len(df)} rules")
-                st.write(f"Columns: {list(df.columns)}")
+                # Add Debug Tool inside the sidebar
+                st.markdown("---")
+                st.write("🔎 **Test Your Logic**")
+                test_txt = st.text_input("Type a merchant name...", placeholder="e.g. Swiggy")
+                if test_txt and fuzz:
+                    best_s = 0
+                    best_r = None
+                    for _, r in df.iterrows():
+                        mer = str(r['Merchant']).lower()
+                        sc = fuzz.token_set_ratio(test_txt.lower(), mer)
+                        if sc > best_s:
+                            best_s = sc
+                            best_r = r
+                    
+                    st.write(f"Best Match: **{best_r['Merchant']}**")
+                    st.write(f"Score: **{best_s}**")
+                    if best_s >= 70:
+                        st.success(f"✅ Matched: {best_r['Category']}")
+                    else:
+                        st.error("❌ No Match (<70)")
             else:
                 st.error("❌ Missing Columns")
                 st.write(f"Found: {list(df.columns)}")
