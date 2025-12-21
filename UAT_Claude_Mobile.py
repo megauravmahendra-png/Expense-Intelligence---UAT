@@ -4,8 +4,9 @@ import numpy as np
 import plotly.express as px
 from io import BytesIO
 import calendar
-from glob import glob
-import os
+import gdown
+from pathlib import Path
+import shutil
 
 # =========================================================
 # CONFIG
@@ -89,6 +90,34 @@ def get_chart_config():
         'modeBarButtonsToRemove': ['zoom', 'pan', 'select', 'lasso', 'zoomIn', 'zoomOut', 'autoScale', 'resetScale']
     }
 
+def download_from_gdrive_folder(folder_id):
+    """Downloads all Excel files from a public Google Drive folder"""
+    
+    # Create temp directory
+    temp_dir = Path("temp_data")
+    
+    # Clean up old temp directory if exists
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+    
+    temp_dir.mkdir(exist_ok=True)
+    
+    # Google Drive folder URL
+    folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+    
+    try:
+        # Download all files from folder
+        gdown.download_folder(folder_url, output=str(temp_dir), quiet=False, use_cookies=False, remaining_ok=True)
+        
+        # Get all Excel files
+        excel_files = list(temp_dir.glob("*.xlsx"))
+        
+        return [str(f) for f in excel_files if not f.name.startswith("~$")]
+    
+    except Exception as e:
+        st.error(f"Error downloading from Google Drive: {e}")
+        return []
+
 WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 
 # =========================================================
@@ -96,9 +125,10 @@ WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sun
 # =========================================================
 with st.sidebar:
     st.markdown("### 📂 Data Source")
-    mode = st.radio("", ["Manual Upload", "Local Folder (Auto-sync)"])
+    mode = st.radio("", ["Google Drive (Auto-sync)", "Manual Upload"])
 
 dfs = []
+
 if mode == "Manual Upload":
     uploads = st.sidebar.file_uploader(
         "Upload Excel files",
@@ -107,25 +137,36 @@ if mode == "Manual Upload":
     )
     if uploads:
         dfs = [pd.read_excel(f) for f in uploads]
-else:
-    folder = st.sidebar.text_input(
-        "Local Folder Path",
-        r"E:\Mahendra\DashBoard\Data"
-    )
-    all_files = glob(os.path.join(folder, "*.xlsx"))
-    # 🔒 IGNORE EXCEL TEMP / LOCK FILES
-    valid_files = [
-        f for f in all_files
-        if not os.path.basename(f).startswith("~$")
-    ]
-    for f in valid_files:
-        try:
-            dfs.append(pd.read_excel(f))
-        except Exception as e:
-            st.warning(f"Skipped file: {os.path.basename(f)}")
+
+else:  # Google Drive mode
+    # Your Google Drive folder ID (extracted from the link)
+    folder_id = "10PQWwwCbKU5Y9EsZ12HYXGe67Y0CaEIY"
+    
+    st.sidebar.info("📁 Syncing from your Google Drive folder")
+    
+    if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
+        with st.spinner("Downloading files from Google Drive..."):
+            files = download_from_gdrive_folder(folder_id)
+            
+            if files:
+                for f in files:
+                    try:
+                        dfs.append(pd.read_excel(f))
+                    except Exception as e:
+                        st.warning(f"Skipped file: {Path(f).name}")
+                
+                st.session_state['gdrive_loaded'] = True
+                st.session_state['gdrive_dfs'] = dfs
+                st.sidebar.success(f"✅ Loaded {len(dfs)} files")
+            else:
+                st.sidebar.error("No files found or error occurred")
+    
+    # Use cached data if available
+    if 'gdrive_dfs' in st.session_state:
+        dfs = st.session_state['gdrive_dfs']
 
 if not dfs:
-    st.info("Add expense data to begin.")
+    st.info("📁 Click 'Sync Now' to load data from Google Drive, or switch to Manual Upload")
     st.stop()
 
 df = pd.concat(dfs, ignore_index=True)
