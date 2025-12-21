@@ -10,7 +10,13 @@ import shutil
 import PyPDF2
 import re
 from datetime import datetime
-from fuzzywuzzy import fuzz
+
+# Try importing fuzzywuzzy, warn if missing
+try:
+    from fuzzywuzzy import fuzz
+except ImportError:
+    st.error("⚠️ 'fuzzywuzzy' library is missing. Please add 'fuzzywuzzy' and 'python-Levenshtein' to your requirements.txt")
+    fuzz = None
 
 # =========================================================
 # CONFIG
@@ -120,36 +126,37 @@ def extract_gpay_transactions_from_pdf(pdf_file):
 def categorize_transaction(description, amount, logic_sheet_df):
     """Categorize transaction using fuzzy matching and heuristics"""
     
-    if not logic_sheet_df.empty:
-        # Try fuzzy matching against Logic Sheet
+    # 1. Fuzzy Matching against Logic Sheet
+    if not logic_sheet_df.empty and fuzz is not None:
         best_match_score = 0
         best_match_row = None
         
-        # Ensure required columns exist before processing
-        required_cols = ['Merchant', 'Category']
-        if all(col in logic_sheet_df.columns for col in required_cols):
-            for idx, row in logic_sheet_df.iterrows():
-                merchant = str(row.get('Merchant', '')).strip()
-                if not merchant:
-                    continue
-                
-                # Fuzzy match
-                score = fuzz.partial_ratio(description.lower(), merchant.lower())
-                
-                if score > best_match_score:
-                    best_match_score = score
-                    best_match_row = row
+        # Ensure we are working with strings
+        desc_search = str(description).lower()
+        
+        for idx, row in logic_sheet_df.iterrows():
+            # Force string conversion to avoid errors with numbers in Merchant column
+            merchant = str(row.get('Merchant', '')).strip().lower()
             
-            # If match is strong enough (>80%), use it
-            if best_match_score >= 80 and best_match_row is not None:
-                # Use 'Subcategory' if present, otherwise default
-                sub_cat = str(best_match_row.get('Subcategory', 'Yet to Name'))
-                return (
-                    str(best_match_row.get('Category', 'Misc')),
-                    sub_cat
-                )
+            if not merchant:
+                continue
+            
+            # Fuzzy match
+            score = fuzz.partial_ratio(desc_search, merchant)
+            
+            if score > best_match_score:
+                best_match_score = score
+                best_match_row = row
+        
+        # If match is strong enough (>80%), use it
+        if best_match_score >= 80 and best_match_row is not None:
+            sub_cat = str(best_match_row.get('Subcategory', 'Yet to Name'))
+            return (
+                str(best_match_row.get('Category', 'Misc')),
+                sub_cat
+            )
     
-    # Heuristic Rules for unmatched transactions
+    # 2. Heuristic Rules (Fallback)
     desc_lower = description.lower()
     
     # Transport: Small amounts (₹15-₹50) OR transport keywords
@@ -188,6 +195,7 @@ def process_pdf_data(pdf_files, logic_sheet_df):
     combined_df['Category'] = 'Misc'
     combined_df['Sub Category'] = 'Yet to Name'
     
+    # Pass the loaded logic sheet to the categorizer
     for idx, row in combined_df.iterrows():
         # Skip received transactions
         if row['Type'] == 'Received':
@@ -469,8 +477,9 @@ def extract_folder_id_from_link(link):
     return None
 
 def load_logic_sheet(link):
-    """Load categorization logic with SMART COLUMN DETECTION"""
+    """Load categorization logic with SMART COLUMN DETECTION and GID support"""
     if not link or pd.isna(link):
+        st.sidebar.warning("⚠️ Logic Sheet Link is missing")
         return pd.DataFrame()
     
     try:
@@ -479,11 +488,23 @@ def load_logic_sheet(link):
             sheet_id = link.split('/d/')[1].split('/')[0]
         else:
             sheet_id = link
+            
+        # Extract GID (Sheet Tab ID) if present
+        gid_param = ""
+        if 'gid=' in link:
+            try:
+                gid = link.split('gid=')[1].split('&')[0].split('#')[0]
+                gid_param = f"&gid={gid}"
+            except:
+                pass
         
-        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+        # Construct export URL
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_param}"
+        
         df = pd.read_csv(url)
         
         if df.empty:
+            st.sidebar.warning("⚠️ Logic Sheet downloaded but is empty.")
             return df
             
         # --- SMART READER LOGIC ---
@@ -514,13 +535,27 @@ def load_logic_sheet(link):
             df = df.rename(columns=rename_dict)
         
         # 5. Verify minimal requirement (Merchant + Category)
-        if 'Merchant' not in df.columns or 'Category' not in df.columns:
-            st.sidebar.warning(f"⚠️ Logic Sheet loaded but couldn't auto-detect 'Merchant' or 'Category' columns. Found: {list(df.columns)}")
+        required_cols = ['Merchant', 'Category']
+        found_cols = [c for c in required_cols if c in df.columns]
         
+        # DEBUG DISPLAY
+        with st.sidebar.expander("🐞 Logic Sheet Status", expanded=True):
+            if len(found_cols) == len(required_cols):
+                st.success(f"✅ Loaded {len(df)} rules")
+                st.write(f"Columns: {list(df.columns)}")
+            else:
+                st.error("❌ Missing Columns")
+                st.write(f"Found: {list(df.columns)}")
+                st.write(f"Need: {required_cols}")
+        
+        # Force string type on Merchant to ensure matching works
+        if 'Merchant' in df.columns:
+            df['Merchant'] = df['Merchant'].astype(str)
+            
         return df
         
     except Exception as e:
-        st.warning(f"Could not load Logic Sheet: {e}")
+        st.sidebar.error(f"❌ Logic Sheet Error: {str(e)[:100]}")
         return pd.DataFrame()
 
 def generate_insights(current_month_df, previous_month_df, amt_col):
