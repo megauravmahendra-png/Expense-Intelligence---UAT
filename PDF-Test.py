@@ -8,7 +8,7 @@ from io import BytesIO
 def extract_gpay_transactions(pdf_file):
     """
     Extract transaction data from GPay PDF statement
-    Uses regex pattern matching on the entire text
+    Handles text with no spaces between words
     """
     
     # Read PDF
@@ -21,37 +21,49 @@ def extract_gpay_transactions(pdf_file):
     
     transactions = []
     
-    # Debug: Show first 500 chars
-    st.write("**PDF Text Preview:**")
-    st.code(all_text[:1000])
+    # Pattern to match transactions in GPay format (even without spaces)
+    # Matches: DDMon,YYYY followed by time, then "Paidto" or "Receivedfrom", then name, then ₹amount
     
-    # Pattern to match GPay transactions
-    # Format: DD MMM, YYYY\nHH:MM AM/PM\nPaid to NAME\nUPI Transaction ID: XXX\nPaid by Bank XXX\n₹AMOUNT
+    # First, let's find all date-amount pairs
+    # Pattern: DD(Jan|Feb|...),YYYY ... ₹AMOUNT
+    pattern = r'(\d{1,2}(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec),\d{4}).*?(?:Paidto|Receivedfrom)(.*?)(?:UPI|Transaction).*?₹([\d,]+\.?\d*)'
     
-    # More flexible pattern - match date, description, and amount
-    pattern = r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec),?\s+\d{4}).*?(?:Paid to|Received from)\s+(.+?)(?:\n|UPI).*?₹\s*([\d,]+\.?\d*)'
+    matches = re.findall(pattern, all_text, re.DOTALL | re.IGNORECASE)
     
-    matches = re.findall(pattern, all_text, re.DOTALL | re.MULTILINE)
+    st.write(f"**Debug: Found {len(matches)} matches with new pattern**")
     
-    st.write(f"**Found {len(matches)} potential transactions**")
+    if len(matches) > 0:
+        st.write("**Sample match:**", matches[0] if matches else "None")
     
     for match in matches:
         try:
             date_str, description, amount_str = match
             
-            # Parse date
-            date_clean = date_str.replace(',', '').strip()
-            date = datetime.strptime(date_clean, '%d %b %Y')
+            # Parse date - handle "01Jun,2025" format
+            # Extract day, month, year
+            date_match = re.match(r'(\d{1,2})(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec),(\d{4})', date_str)
+            if date_match:
+                day, month, year = date_match.groups()
+                date = datetime.strptime(f"{day} {month} {year}", '%d %b %Y')
+            else:
+                continue
             
             # Clean amount
             amount = float(amount_str.replace(',', ''))
             
-            # Clean description - take first line only
-            description = description.split('\n')[0].strip()
+            # Clean description - get first reasonable length text
+            # Remove extra characters and truncate
+            description = description.strip()
+            # Take only first 50 chars or until newline
+            description = description.split('\n')[0][:50].strip()
             
             # Skip rewards and self-transfers
-            skip_keywords = ['Google Pay rewards', 'Self transfer', 'Google Play']
-            if any(keyword in description for keyword in skip_keywords):
+            skip_keywords = ['GooglePayrewards', 'Selftransfer', 'GooglePlay', 'rewards']
+            if any(keyword.lower() in description.lower().replace(' ', '') for keyword in skip_keywords):
+                continue
+            
+            # Skip if description is too short or empty
+            if len(description) < 3:
                 continue
             
             # Auto-categorize
@@ -67,7 +79,7 @@ def extract_gpay_transactions(pdf_file):
             })
             
         except Exception as e:
-            st.write(f"Error parsing: {e}")
+            st.write(f"Error parsing: {str(e)}")
             continue
     
     # Create DataFrame
