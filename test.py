@@ -283,26 +283,58 @@ with tab2:
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
+    # with right:
+    #     st.markdown("#### 🧩 Expense Composition")
+    #     fig = px.treemap(
+    #         month_df,
+    #         path=["Category","Sub Category"],
+    #         values=amt_col,
+    #         template="plotly_dark"
+    #     )
+
+    #   # # NEW: Update traces to show Label, Formatted Amount, and Percentage
+    #   #   fig.update_traces(
+    #   #       textinfo="label+value+percent parent",
+    #   #       texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentParent:.1%}"
+    #   #   )
+    #     # CHANGED: Used percentRoot instead of percentParent
+    #     fig.update_traces(
+    #         textinfo="label+value+percent root",
+    #         texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
+    #     )
+      
+    #     fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+    #     st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     with right:
         st.markdown("#### 🧩 Expense Composition")
+        
+        # 1. Prepare data: Create specific labels for Parent Categories
+        chart_df = month_df.copy() # Work on a copy to avoid warnings
+        total_monthly = chart_df[amt_col].sum()
+        
+        # Calculate spend per category to derive the % for the parent label
+        cat_sums = chart_df.groupby("Category")[amt_col].sum()
+        
+        # Create a new column "Category Label" that looks like: "Bill Payment (40.8%)"
+        chart_df["Category Label"] = chart_df["Category"].apply(
+            lambda x: f"{x} ({cat_sums.get(x, 0) / total_monthly:.1%})" if total_monthly > 0 else x
+        )
+
+        # 2. Build the Treemap using the NEW "Category Label" as the parent
         fig = px.treemap(
-            month_df,
-            path=["Category","Sub Category"],
+            chart_df,
+            path=["Category Label", "Sub Category"], # Use the custom label here
             values=amt_col,
             template="plotly_dark"
         )
-
-      # # NEW: Update traces to show Label, Formatted Amount, and Percentage
-      #   fig.update_traces(
-      #       textinfo="label+value+percent parent",
-      #       texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentParent:.1%}"
-      #   )
-        # CHANGED: Used percentRoot instead of percentParent
+        
+        # 3. Formatting: This applies to the boxes (Sub Categories)
+        # Shows: Name, Amount (₹), and Percentage of Total
         fig.update_traces(
             textinfo="label+value+percent root",
             texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
         )
-      
+        
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
