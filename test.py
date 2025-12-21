@@ -7,6 +7,7 @@ import calendar
 import gdown
 from pathlib import Path
 import shutil
+import requests
 
 # =========================================================
 # CONFIG
@@ -14,11 +15,147 @@ import shutil
 st.set_page_config(
     page_title="Expense Intelligence - UAT",
     page_icon="💳",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # =========================================================
-# UI THEME
+# AUTHENTICATION
+# =========================================================
+def load_credentials():
+    """Load credentials from Google Sheets"""
+    sheet_id = "1Im3g5NNm5962SUA-rd4WBr09n0nX2pLH5yHWc5BlXVA"
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    try:
+        df = pd.read_csv(url)
+        return df
+    except Exception as e:
+        st.error(f"Error loading credentials: {e}")
+        return None
+
+def login_page():
+    """Beautiful login page"""
+    
+    # Custom CSS for login page
+    st.markdown("""
+    <style>
+    .login-container {
+        max-width: 450px;
+        margin: 100px auto;
+        padding: 50px 40px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 24px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .login-title {
+        font-size: 2.5rem;
+        font-weight: 800;
+        text-align: center;
+        color: white;
+        margin-bottom: 10px;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+    }
+    .login-subtitle {
+        text-align: center;
+        color: rgba(255,255,255,0.9);
+        margin-bottom: 40px;
+        font-size: 1rem;
+    }
+    .stTextInput > div > div > input {
+        background: rgba(255,255,255,0.2);
+        border: 2px solid rgba(255,255,255,0.3);
+        border-radius: 12px;
+        color: white;
+        font-size: 1rem;
+        padding: 12px 16px;
+    }
+    .stTextInput > div > div > input:focus {
+        border-color: rgba(255,255,255,0.8);
+        box-shadow: 0 0 0 3px rgba(255,255,255,0.1);
+    }
+    .stTextInput > label {
+        color: white !important;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+    .login-button > button {
+        width: 100%;
+        background: white;
+        color: #667eea;
+        font-weight: 700;
+        font-size: 1.1rem;
+        padding: 14px;
+        border-radius: 12px;
+        border: none;
+        margin-top: 20px;
+        transition: all 0.3s;
+    }
+    .login-button > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    }
+    .creator-text {
+        text-align: center;
+        color: rgba(255,255,255,0.8);
+        margin-top: 30px;
+        font-size: 0.9rem;
+        font-style: italic;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Login container
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.markdown('<div class="login-container">', unsafe_allow_html=True)
+        st.markdown('<div class="login-title">💳 Expense Intelligence</div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-subtitle">Designed for awareness, not anxiety</div>', unsafe_allow_html=True)
+        
+        username = st.text_input("Username", placeholder="Enter your username", key="login_user")
+        password = st.text_input("Password", type="password", placeholder="Enter your password", key="login_pass")
+        
+        st.markdown('<div class="login-button">', unsafe_allow_html=True)
+        login_btn = st.button("🔐 Login", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        if login_btn:
+            if username and password:
+                credentials = load_credentials()
+                
+                if credentials is not None:
+                    # Check credentials
+                    user_match = credentials[
+                        (credentials['User Name'].str.strip() == username.strip()) & 
+                        (credentials['Password'].astype(str).str.strip() == password.strip())
+                    ]
+                    
+                    if not user_match.empty:
+                        # Get the Google Drive link for this user
+                        drive_link = user_match.iloc[0].get('Google Drive Data Link', '')
+                        
+                        st.session_state['authenticated'] = True
+                        st.session_state['username'] = username
+                        st.session_state['user_drive_link'] = str(drive_link).strip() if pd.notna(drive_link) else ''
+                        st.rerun()
+                    else:
+                        st.error("❌ Incorrect username or password")
+            else:
+                st.warning("⚠️ Please enter both username and password")
+        
+        st.markdown('<div class="creator-text">Created by Gaurav Mahendra</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# Check authentication
+if 'authenticated' not in st.session_state:
+    st.session_state['authenticated'] = False
+
+if not st.session_state['authenticated']:
+    login_page()
+    st.stop()
+
+# =========================================================
+# UI THEME (AFTER LOGIN)
 # =========================================================
 st.markdown("""
 <style>
@@ -55,14 +192,38 @@ body { background:#0b1220; color:#e5e7eb; }
     color:#9ca3af;
     font-size:0.85rem;
 }
+.insight-box {
+    background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+    border-radius: 16px;
+    padding: 20px;
+    margin: 10px 0;
+    color: white;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+.insight-icon {
+    font-size: 1.5rem;
+    margin-right: 10px;
+}
+.insight-text {
+    font-size: 1rem;
+    line-height: 1.6;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # =========================================================
 # HEADER
 # =========================================================
-st.markdown("## 💳 Expense Intelligence - UAT")
-st.markdown("<div class='subtle'>Designed for awareness, not anxiety</div>", unsafe_allow_html=True)
+col1, col2 = st.columns([6, 1])
+with col1:
+    st.markdown("## 💳 Expense Intelligence - UAT")
+    st.markdown("<div class='subtle'>Designed for awareness, not anxiety</div>", unsafe_allow_html=True)
+with col2:
+    st.markdown(f"**👤 {st.session_state['username']}**")
+    if st.button("🚪 Logout"):
+        st.session_state['authenticated'] = False
+        st.rerun()
+
 st.markdown("---")
 
 # =========================================================
@@ -81,42 +242,92 @@ def format_month(m):
 def get_chart_config():
     """Returns Plotly config optimized for mobile touch screens"""
     return {
-        'displayModeBar': False,     # Hide the toolbar
-        'scrollZoom': False,         # Disable zoom on scroll/pinch
-        'doubleClick': False,        # Disable double-click zoom
-        'dragMode': False,           # Disable pan/drag
-        'staticPlot': False,         # Keep interactivity for tooltips
-        'displaylogo': False,        # Remove Plotly logo
+        'displayModeBar': False,
+        'scrollZoom': False,
+        'doubleClick': False,
+        'dragMode': False,
+        'staticPlot': False,
+        'displaylogo': False,
         'modeBarButtonsToRemove': ['zoom', 'pan', 'select', 'lasso', 'zoomIn', 'zoomOut', 'autoScale', 'resetScale']
     }
 
 def download_from_gdrive_folder(folder_id):
     """Downloads all Excel files from a public Google Drive folder"""
-    
-    # Create temp directory
     temp_dir = Path("temp_data")
     
-    # Clean up old temp directory if exists
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     
     temp_dir.mkdir(exist_ok=True)
-    
-    # Google Drive folder URL
     folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
     
     try:
-        # Download all files from folder
         gdown.download_folder(folder_url, output=str(temp_dir), quiet=False, use_cookies=False, remaining_ok=True)
-        
-        # Get all Excel files
         excel_files = list(temp_dir.glob("*.xlsx"))
-        
         return [str(f) for f in excel_files if not f.name.startswith("~$")]
-    
     except Exception as e:
-        st.error(f"Error downloading from Google Drive: {e}")
-        return []
+        return None  # Return None on error to distinguish from empty folder
+
+def extract_folder_id_from_link(link):
+    """Extract folder ID from various Google Drive link formats"""
+    if not link or pd.isna(link):
+        return None
+    
+    link = str(link).strip()
+    
+    # Format 1: https://drive.google.com/drive/folders/FOLDER_ID
+    if '/folders/' in link:
+        try:
+            folder_id = link.split('/folders/')[1].split('?')[0].strip()
+            return folder_id
+        except:
+            return None
+    
+    # Format 2: Direct folder ID
+    if len(link) > 20 and '/' not in link:
+        return link
+    
+    return None
+
+def generate_insights(current_month_df, previous_month_df, amt_col):
+    """Generate intelligent insights comparing current and previous month"""
+    insights = []
+    
+    # Total spend comparison
+    current_total = current_month_df[amt_col].sum()
+    prev_total = previous_month_df[amt_col].sum() if not previous_month_df.empty else 0
+    
+    if prev_total > 0:
+        pct_change = ((current_total - prev_total) / prev_total) * 100
+        if pct_change > 10:
+            insights.append(f"💸 Your spending increased by {pct_change:.1f}% compared to last month (₹{current_total:,.0f} vs ₹{prev_total:,.0f})")
+        elif pct_change < -10:
+            insights.append(f"✅ Great job! You saved {abs(pct_change):.1f}% compared to last month (₹{current_total:,.0f} vs ₹{prev_total:,.0f})")
+        else:
+            insights.append(f"📊 Your spending is stable at ₹{current_total:,.0f}, similar to last month (₹{prev_total:,.0f})")
+    
+    # Category analysis
+    current_cat = current_month_df.groupby("Category")[amt_col].sum()
+    prev_cat = previous_month_df.groupby("Category")[amt_col].sum() if not previous_month_df.empty else pd.Series()
+    
+    for cat in current_cat.index:
+        if cat in prev_cat.index and prev_cat[cat] > 0:
+            cat_change = ((current_cat[cat] - prev_cat[cat]) / prev_cat[cat]) * 100
+            if cat_change > 25:
+                insights.append(f"⚠️ {cat} spending jumped by {cat_change:.1f}% (₹{current_cat[cat]:,.0f} vs ₹{prev_cat[cat]:,.0f})")
+    
+    # Weekend vs Weekday
+    weekend_avg = current_month_df[current_month_df["WeekType"] == "Weekend"].groupby(current_month_df[detect(current_month_df, ["date"])])[amt_col].sum().mean()
+    weekday_avg = current_month_df[current_month_df["WeekType"] == "Weekday"].groupby(current_month_df[detect(current_month_df, ["date"])])[amt_col].sum().mean()
+    
+    if weekend_avg > weekday_avg * 1.3:
+        insights.append(f"🎉 You spend {((weekend_avg/weekday_avg - 1) * 100):.0f}% more on weekends (₹{weekend_avg:,.0f} vs ₹{weekday_avg:,.0f} per day)")
+    
+    # Top expense
+    top_expense = current_month_df.nlargest(1, amt_col).iloc[0]
+    insights.append(f"🔝 Your largest expense was ₹{top_expense[amt_col]:,.0f} on {top_expense['Description']}")
+    
+    return insights
 
 WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 
@@ -138,30 +349,57 @@ if mode == "Manual Upload":
     if uploads:
         dfs = [pd.read_excel(f) for f in uploads]
 
-else:  # Google Drive mode
-    # Your Google Drive folder ID (extracted from the link)
-    folder_id = "10PQWwwCbKU5Y9EsZ12HYXGe67Y0CaEIY"
+else:  # Google Drive Auto-sync
+    # Get user's drive link from session
+    user_drive_link = st.session_state.get('user_drive_link', '')
     
-    st.sidebar.info("📁 Syncing from your Google Drive folder")
+    # Check if link exists
+    if not user_drive_link:
+        st.sidebar.error("📁 Drive link is missing. Please upload manual data.")
+        st.info("📁 Drive link is missing. Please switch to Manual Upload mode.")
+        st.stop()
+    
+    # Extract folder ID from link
+    folder_id = extract_folder_id_from_link(user_drive_link)
+    
+    if not folder_id:
+        st.sidebar.error("⚠️ Invalid Google Drive link format")
+        st.error("⚠️ Kindly check the Google Drive link\n\n📞 Contact Mahendra: 7627068716 for help")
+        st.stop()
+    
+    st.sidebar.info(f"📁 Syncing from your Google Drive folder")
     
     if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
         with st.spinner("Downloading files from Google Drive..."):
             files = download_from_gdrive_folder(folder_id)
             
-            if files:
-                for f in files:
-                    try:
-                        dfs.append(pd.read_excel(f))
-                    except Exception as e:
-                        st.warning(f"Skipped file: {Path(f).name}")
-                
+            # Check for different error scenarios
+            if files is None:
+                st.sidebar.error("❌ Could not access Google Drive folder")
+                st.error("⚠️ Kindly make link visible for all (Anyone with the link can view)\n\n📞 Contact Mahendra: 7627068716 for help")
+                st.stop()
+            
+            if not files:
+                st.sidebar.warning("📂 No Excel files found in folder")
+                st.warning("📂 No Excel files found. Please upload data to your Google Drive folder.")
+                st.stop()
+            
+            # Load files successfully
+            for f in files:
+                try:
+                    dfs.append(pd.read_excel(f))
+                except Exception as e:
+                    st.warning(f"Skipped file: {Path(f).name}")
+            
+            if dfs:
                 st.session_state['gdrive_loaded'] = True
                 st.session_state['gdrive_dfs'] = dfs
                 st.sidebar.success(f"✅ Loaded {len(dfs)} files")
             else:
-                st.sidebar.error("No files found or error occurred")
+                st.sidebar.error("❌ Could not load any files")
+                st.error("❌ Could not load Excel files. Please check file format.")
+                st.stop()
     
-    # Use cached data if available
     if 'gdrive_dfs' in st.session_state:
         dfs = st.session_state['gdrive_dfs']
 
@@ -203,18 +441,23 @@ selected_month = st.sidebar.selectbox(
 month_df = df[df["Month"] == selected_month]
 non_bill_df = month_df[month_df["Category"] != "Bill Payment"]
 
+# Get previous month data for insights
+current_month_idx = months.index(selected_month)
+previous_month_df = df[df["Month"] == months[current_month_idx - 1]] if current_month_idx > 0 else pd.DataFrame()
+
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 Trends",
     "📅 Monthly View",
+    "💡 Insights",
     "🧠 Intelligence",
     "📤 Export"
 ])
 
 # =========================================================
-# TAB 1 — TRENDS (SIDE-BY-SIDE)
+# TAB 1 — TRENDS
 # =========================================================
 with tab1:
     st.markdown("### 📈 Long-term Trends")
@@ -283,59 +526,83 @@ with tab2:
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
-    # with right:
-    #     st.markdown("#### 🧩 Expense Composition")
-    #     fig = px.treemap(
-    #         month_df,
-    #         path=["Category","Sub Category"],
-    #         values=amt_col,
-    #         template="plotly_dark"
-    #     )
-
-    #   # # NEW: Update traces to show Label, Formatted Amount, and Percentage
-    #   #   fig.update_traces(
-    #   #       textinfo="label+value+percent parent",
-    #   #       texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentParent:.1%}"
-    #   #   )
-    #     # CHANGED: Used percentRoot instead of percentParent
-    #     fig.update_traces(
-    #         textinfo="label+value+percent root",
-    #         texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
-    #     )
-      
-    #     fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-    #     st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     with right:
         st.markdown("#### 🧩 Expense Composition")
         
-        # 1. Prepare data: Create specific labels for Parent Categories
-        chart_df = month_df.copy() # Work on a copy to avoid warnings
-        total_monthly = chart_df[amt_col].sum()
+        # Define vibrant, happy colors for each category
+        category_colors = {
+            'Food & Dining': '#FF6B6B',      # Bright coral red
+            'Shopping': '#FFD93D',           # Sunny yellow
+            'Transportation': '#6BCF7F',     # Fresh green
+            'Entertainment': '#A78BFA',      # Vibrant purple
+            'Bills & Utilities': '#4ECDC4',  # Turquoise
+            'Healthcare': '#FF8787',         # Soft pink-red
+            'Education': '#74C0FC',          # Sky blue
+            'Personal Care': '#FFA94D',      # Warm orange
+            'Travel': '#51CF66',             # Lime green
+            'Investments': '#845EF7',        # Royal purple
+            'Others': '#94A3B8',             # Soft gray
+            'Bill Payment': '#20C997',       # Mint green
+            'Uncategorized': '#ADB5BD'       # Light gray
+        }
         
-        # Calculate spend per category to derive the % for the parent label
-        cat_sums = chart_df.groupby("Category")[amt_col].sum()
+        # Calculate totals
+        total_amount = month_df[amt_col].sum()
         
-        # Create a new column "Category Label" that looks like: "Bill Payment (40.8%)"
-        chart_df["Category Label"] = chart_df["Category"].apply(
-            lambda x: f"{x} ({cat_sums.get(x, 0) / total_monthly:.1%})" if total_monthly > 0 else x
-        )
-
-        # 2. Build the Treemap using the NEW "Category Label" as the parent
+        # Create a proper hierarchical structure
+        treemap_data = []
+        
+        # Add categories
+        for cat in month_df['Category'].unique():
+            cat_data = month_df[month_df['Category'] == cat]
+            cat_total = cat_data[amt_col].sum()
+            cat_pct = (cat_total / total_amount * 100)
+            
+            # Add subcategories
+            for sub in cat_data['Sub Category'].unique():
+                sub_data = cat_data[cat_data['Sub Category'] == sub]
+                sub_total = sub_data[amt_col].sum()
+                sub_pct_of_cat = (sub_total / cat_total * 100)
+                sub_pct_of_total = (sub_total / total_amount * 100)
+                
+                treemap_data.append({
+                    'Category': cat,
+                    'Sub Category': sub,
+                    'Amount': sub_total,
+                    'cat_label': f"{cat}\n₹{cat_total:,.0f}\n{cat_pct:.1f}% of total",
+                    'sub_label': f"{sub}\n₹{sub_total:,.0f}\n{sub_pct_of_cat:.1f}% of {cat}\n{sub_pct_of_total:.1f}% of total"
+                })
+        
+        treemap_df = pd.DataFrame(treemap_data)
+        
         fig = px.treemap(
-            chart_df,
-            path=["Category Label", "Sub Category"], # Use the custom label here
-            values=amt_col,
+            treemap_df,
+            path=['Category', 'Sub Category'],
+            values='Amount',
+            color='Category',
+            color_discrete_map=category_colors,
             template="plotly_dark"
         )
         
-        # 3. Formatting: This applies to the boxes (Sub Categories)
-        # Shows: Name, Amount (₹), and Percentage of Total
+        # Update text display
         fig.update_traces(
-            textinfo="label+value+percent root",
-            texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
+            textposition="middle center",
+            textfont=dict(size=11, color='white', family='Arial'),
+            marker=dict(
+                line=dict(width=3, color='#1e293b'),
+                cornerradius=5
+            ),
+            hovertemplate='<b>%{label}</b><br>₹%{value:,.0f}<extra></extra>',
+            texttemplate="<b>%{label}</b><br>₹%{value:,.0f}",
         )
         
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        fig.update_layout(
+            xaxis_fixedrange=True, 
+            yaxis_fixedrange=True,
+            margin=dict(t=10, b=10, l=10, r=10),
+            uniformtext=dict(minsize=8, mode='hide')
+        )
+        
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     # Category vs Day
@@ -360,10 +627,7 @@ with tab2:
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
-    # =====================================================
     # Weekday vs Weekend Behaviour 
-    # =====================================================
-    
     st.markdown("### 📅 Weekday vs Weekend Behaviour")
     f1,f2,f3 = st.columns([1.2,1.2,1])
     
@@ -414,9 +678,24 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
 # =========================================================
-# TAB 3 — INTELLIGENCE
+# TAB 3 — INSIGHTS
 # =========================================================
 with tab3:
+    st.markdown("### 💡 Smart Insights")
+    
+    insights = generate_insights(month_df, previous_month_df, amt_col)
+    
+    for insight in insights:
+        st.markdown(f"""
+        <div class="insight-box">
+            <div class="insight-text">{insight}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# =========================================================
+# TAB 4 — INTELLIGENCE
+# =========================================================
+with tab4:
     st.markdown("### 🧠 Signals & Risks")
     
     st.markdown("#### 🔁 Recurring (Uncategorized)")
@@ -434,9 +713,9 @@ with tab3:
     st.dataframe(alerts[[date_col,"Description",amt_col]], use_container_width=True)
 
 # =========================================================
-# TAB 4 — EXPORT
+# TAB 5 — EXPORT
 # =========================================================
-with tab4:
+with tab5:
     buf = BytesIO()
     df.sort_values(date_col).to_excel(buf, index=False)
     buf.seek(0)
