@@ -125,24 +125,29 @@ def categorize_transaction(description, amount, logic_sheet_df):
         best_match_score = 0
         best_match_row = None
         
-        for idx, row in logic_sheet_df.iterrows():
-            merchant = str(row.get('Merchant', '')).strip()
-            if not merchant:
-                continue
+        # Ensure required columns exist before processing
+        required_cols = ['Merchant', 'Category']
+        if all(col in logic_sheet_df.columns for col in required_cols):
+            for idx, row in logic_sheet_df.iterrows():
+                merchant = str(row.get('Merchant', '')).strip()
+                if not merchant:
+                    continue
+                
+                # Fuzzy match
+                score = fuzz.partial_ratio(description.lower(), merchant.lower())
+                
+                if score > best_match_score:
+                    best_match_score = score
+                    best_match_row = row
             
-            # Fuzzy match
-            score = fuzz.partial_ratio(description.lower(), merchant.lower())
-            
-            if score > best_match_score:
-                best_match_score = score
-                best_match_row = row
-        
-        # If match is strong enough (>80%), use it
-        if best_match_score >= 80 and best_match_row is not None:
-            return (
-                str(best_match_row.get('Category', 'Misc')),
-                str(best_match_row.get('Subcategory', 'Yet to Name'))
-            )
+            # If match is strong enough (>80%), use it
+            if best_match_score >= 80 and best_match_row is not None:
+                # Use 'Subcategory' if present, otherwise default
+                sub_cat = str(best_match_row.get('Subcategory', 'Yet to Name'))
+                return (
+                    str(best_match_row.get('Category', 'Misc')),
+                    sub_cat
+                )
     
     # Heuristic Rules for unmatched transactions
     desc_lower = description.lower()
@@ -464,7 +469,7 @@ def extract_folder_id_from_link(link):
     return None
 
 def load_logic_sheet(link):
-    """Load categorization logic from Google Sheets"""
+    """Load categorization logic with SMART COLUMN DETECTION"""
     if not link or pd.isna(link):
         return pd.DataFrame()
     
@@ -477,7 +482,43 @@ def load_logic_sheet(link):
         
         url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
         df = pd.read_csv(url)
+        
+        if df.empty:
+            return df
+            
+        # --- SMART READER LOGIC ---
+        # 1. Normalize all existing columns (lowercase, remove spaces/hyphens)
+        clean_cols = {c.lower().replace(' ', '').replace('-', '').replace('_', ''): c for c in df.columns}
+        
+        # 2. Define standard names and possible variations
+        mapping = {
+            'Merchant': ['merchant', 'name', 'party', 'description', 'payee'],
+            'Category': ['category', 'cat', 'type'],
+            'Subcategory': ['subcategory', 'sub-category', 'sub category', 'sub']
+        }
+        
+        rename_dict = {}
+        
+        # 3. Find matches
+        for standard, variations in mapping.items():
+            for var in variations:
+                clean_var = var.replace(' ', '').replace('-', '')
+                if clean_var in clean_cols:
+                    # Map the actual column name to the standard name
+                    actual_col_name = clean_cols[clean_var]
+                    rename_dict[actual_col_name] = standard
+                    break
+        
+        # 4. Rename columns
+        if rename_dict:
+            df = df.rename(columns=rename_dict)
+        
+        # 5. Verify minimal requirement (Merchant + Category)
+        if 'Merchant' not in df.columns or 'Category' not in df.columns:
+            st.sidebar.warning(f"⚠️ Logic Sheet loaded but couldn't auto-detect 'Merchant' or 'Category' columns. Found: {list(df.columns)}")
+        
         return df
+        
     except Exception as e:
         st.warning(f"Could not load Logic Sheet: {e}")
         return pd.DataFrame()
@@ -526,7 +567,7 @@ with st.sidebar:
     st.markdown("### 📂 Data Source")
     data_mode = st.radio("", ["📊 Excel/CSV Database", "📄 PDF Database"])
 
-# Load Logic Sheet
+# Load Logic Sheet (Smartly)
 logic_sheet_df = load_logic_sheet(st.session_state.get('logic_sheet_link', ''))
 
 dfs = []
