@@ -474,34 +474,77 @@ with tab2:
     
     with right:
         st.markdown("#### 🧩 Expense Composition")
-        # Prepare treemap data with percentages
+        
+        # Define fixed colors for each category
+        category_colors = {
+            'Food & Dining': '#ef4444',
+            'Shopping': '#f59e0b',
+            'Transportation': '#3b82f6',
+            'Entertainment': '#8b5cf6',
+            'Bills & Utilities': '#10b981',
+            'Healthcare': '#ec4899',
+            'Education': '#06b6d4',
+            'Personal Care': '#f97316',
+            'Travel': '#14b8a6',
+            'Investments': '#6366f1',
+            'Others': '#64748b',
+            'Bill Payment': '#059669',
+            'Uncategorized': '#6b7280'
+        }
+        
+        # Prepare treemap data
         treemap_data = month_df.copy()
-        total = treemap_data[amt_col].sum()
-        treemap_data['Percentage'] = (treemap_data[amt_col] / total * 100).round(1)
-        treemap_data['Label'] = treemap_data.apply(
-            lambda x: f"{x['Category']}<br>₹{x[amt_col]:,.0f} ({x['Percentage']}%)", 
-            axis=1
+        total_amount = treemap_data[amt_col].sum()
+        
+        # Calculate category totals and percentages
+        cat_totals = treemap_data.groupby('Category')[amt_col].sum()
+        
+        # Assign colors based on category
+        treemap_data['Color'] = treemap_data['Category'].map(
+            lambda x: category_colors.get(x, '#64748b')
         )
+        
+        # Create custom labels with amount and percentage
+        def create_label(row):
+            cat_total = cat_totals.get(row['Category'], 0)
+            cat_pct = (cat_total / total_amount * 100) if total_amount > 0 else 0
+            sub_pct = (row[amt_col] / cat_total * 100) if cat_total > 0 else 0
+            
+            # For category level
+            if row['Sub Category'] == row['Category']:
+                return f"{row['Category']}<br>₹{cat_total:,.0f}<br>{cat_pct:.1f}% of total"
+            # For subcategory level
+            else:
+                return f"{row['Sub Category']}<br>₹{row[amt_col]:,.0f}<br>{sub_pct:.1f}% of {row['Category']}<br>{(row[amt_col]/total_amount*100):.1f}% of total"
+        
+        treemap_data['CustomLabel'] = treemap_data.apply(create_label, axis=1)
         
         fig = px.treemap(
             treemap_data,
-            path=["Category","Sub Category"],
+            path=["Category", "Sub Category"],
             values=amt_col,
-            template="plotly_dark",
-            color=amt_col,
-            color_continuous_scale='Blues'
+            color='Category',
+            color_discrete_map=category_colors,
+            template="plotly_dark"
         )
+        
         fig.update_traces(
-            texttemplate="<b>%{label}</b><br>₹%{value:,.0f}<br>%{percentParent}",
             textposition="middle center",
-            textfont=dict(size=12, color='white'),
-            marker=dict(line=dict(width=2, color='#1f2937'))
+            textfont=dict(size=11, color='white', family='Arial'),
+            marker=dict(
+                line=dict(width=2.5, color='#0f172a'),
+                cornerradius=5
+            ),
+            hovertemplate='<b>%{label}</b><br>Amount: ₹%{value:,.0f}<br>%{percentParent}<extra></extra>'
         )
+        
         fig.update_layout(
             xaxis_fixedrange=True, 
             yaxis_fixedrange=True,
-            margin=dict(t=30, b=10, l=10, r=10)
+            margin=dict(t=10, b=10, l=10, r=10),
+            uniformtext=dict(minsize=8, mode='hide')
         )
+        
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     # Category vs Day
