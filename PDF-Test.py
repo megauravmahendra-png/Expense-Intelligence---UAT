@@ -8,7 +8,7 @@ from io import BytesIO
 def extract_gpay_transactions(pdf_file):
     """
     Extract transaction data from GPay PDF statement
-    Returns a DataFrame with Date, Description, Amount, Category, Sub Category
+    Format: Date & time | Transaction details | Amount
     """
     
     # Read PDF
@@ -17,164 +17,268 @@ def extract_gpay_transactions(pdf_file):
     
     # Extract text from all pages
     for page in pdf_reader.pages:
-        all_text += page.extract_text()
+        all_text += page.extract_text() + "\n"
     
     transactions = []
     
-    # Common GPay statement patterns
-    # Pattern 1: Date | Description | Amount
-    # Example: "12 Dec 2024 Swiggy ₹450.00"
-    pattern1 = r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})\s+(.+?)\s+₹\s*([\d,]+\.?\d*)'
+    # Split into lines
+    lines = all_text.split('\n')
     
-    # Pattern 2: Alternative format
-    # Example: "2024-12-12 | Restaurant Name | 450.00"
-    pattern2 = r'(\d{4}-\d{2}-\d{2})\s*\|\s*(.+?)\s*\|\s*₹?\s*([\d,]+\.?\d*)'
-    
-    # Try pattern 1
-    matches = re.findall(pattern1, all_text, re.MULTILINE)
-    
-    if not matches:
-        # Try pattern 2
-        matches = re.findall(pattern2, all_text, re.MULTILINE)
-    
-    for match in matches:
-        date_str, description, amount_str = match
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
         
-        # Parse date
-        try:
-            if '-' in date_str:
-                date = datetime.strptime(date_str, '%Y-%m-%d')
-            else:
-                date = datetime.strptime(date_str, '%d %b %Y')
-        except:
-            continue
+        # Pattern: "DD MMM, YYYY" or "DD MMM, YYYY\nHH:MM AM/PM"
+        date_pattern = r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec),?\s+\d{4})'
         
-        # Clean amount
-        amount = float(amount_str.replace(',', ''))
+        if re.match(date_pattern, line):
+            try:
+                # Get date
+                date_str = line
+                
+                # Get time (next line)
+                i += 1
+                time_str = lines[i].strip() if i < len(lines) else ""
+                
+                # Get transaction details (next line)
+                i += 1
+                description = lines[i].strip() if i < len(lines) else ""
+                
+                # Skip UPI Transaction ID line
+                i += 1
+                if i < len(lines) and "UPI Transaction ID" in lines[i]:
+                    i += 1
+                
+                # Skip "Paid by/to" line
+                if i < len(lines) and ("Paid by" in lines[i] or "Paid to" in lines[i]):
+                    i += 1
+                
+                # Get amount (should be on current line)
+                amount_line = lines[i].strip() if i < len(lines) else ""
+                
+                # Extract amount using pattern ₹X,XXX or ₹XXX.XX
+                amount_match = re.search(r'₹\s*([\d,]+\.?\d*)', amount_line)
+                
+                if amount_match:
+                    amount_str = amount_match.group(1).replace(',', '')
+                    amount = float(amount_str)
+                    
+                    # Parse date
+                    try:
+                        # Handle both "01 Jun, 2025" and "01 Jun 2025"
+                        date_clean = date_str.replace(',', '').strip()
+                        date = datetime.strptime(date_clean, '%d %b %Y')
+                    except:
+                        i += 1
+                        continue
+                    
+                    # Clean description (remove "Paid to" or "Received from")
+                    description = description.replace('Paid to ', '').replace('Received from ', '').strip()
+                    
+                    # Skip if it's a reward, self-transfer, or Google Pay related
+                    skip_keywords = ['Google Pay rewards', 'Self transfer']
+                    if any(keyword in description for keyword in skip_keywords):
+                        i += 1
+                        continue
+                    
+                    # Determine if it's income or expense
+                    transaction_type = 'Expense'
+                    if 'Received from' in lines[i-3] if i >= 3 else False:
+                        transaction_type = 'Income'
+                    
+                    # Auto-categorize
+                    category, sub_category = auto_categorize(description)
+                    
+                    transactions.append({
+                        'Date': date,
+                        'Description': description,
+                        'Amount': amount,
+                        'Type': transaction_type,
+                        'Category': category,
+                        'Sub Category': sub_category
+                    })
+            except Exception as e:
+                pass
         
-        # Clean description
-        description = description.strip()
-        
-        # Auto-categorize based on keywords
-        category, sub_category = auto_categorize(description)
-        
-        transactions.append({
-            'Date': date,
-            'Description': description,
-            'Amount': amount,
-            'Category': category,
-            'Sub Category': sub_category
-        })
+        i += 1
     
     # Create DataFrame
     df = pd.DataFrame(transactions)
     
+    # Remove duplicates
+    if not df.empty:
+        df = df.drop_duplicates(subset=['Date', 'Description', 'Amount'])
+        df = df.sort_values('Date')
+    
     return df
 
 def auto_categorize(description):
-    """
-    Auto-categorize transactions based on merchant name/description
-    """
-    description_lower = description.lower()
+    """Auto-categorize transactions based on merchant name"""
+    desc_lower = description.lower()
     
     # Food & Dining
-    if any(word in description_lower for word in ['swiggy', 'zomato', 'restaurant', 'cafe', 'food', 'dominos', 'pizza', 'mcdonald', 'kfc', 'subway']):
-        return 'Food & Dining', 'Food Delivery'
+    food_keywords = ['swiggy', 'zomato', 'restaurant', 'cafe', 'food', 'dominos', 'pizza', 
+                     'burger', 'mcdonald', 'kfc', 'subway', 'biryani', 'kitchen', 'dhaba',
+                     'mama mea', 'jumboking', 'belgian waffle', 'pvr inox', 'cinepolis',
+                     'chaayos', 'juice', 'parathe', 'misthan', 'golgappe', 'chat', 'bhaji']
+    if any(word in desc_lower for word in food_keywords):
+        return 'Food & Dining', 'Food Delivery/Restaurant'
     
     # Shopping
-    if any(word in description_lower for word in ['amazon', 'flipkart', 'myntra', 'ajio', 'shop', 'store', 'mall']):
-        return 'Shopping', 'Online Shopping'
+    shopping_keywords = ['amazon', 'flipkart', 'myntra', 'ajio', 'meesho', 'blinkit', 
+                         'zepto', 'dmart', 'store', 'kirana', 'general', 'market', 'mall',
+                         'supermarket', 'trading', 'enterprises', 'shop']
+    if any(word in desc_lower for word in shopping_keywords):
+        return 'Shopping', 'Online/Retail Shopping'
     
     # Transportation
-    if any(word in description_lower for word in ['uber', 'ola', 'rapido', 'metro', 'petrol', 'fuel', 'parking']):
-        return 'Transportation', 'Cab/Auto'
+    transport_keywords = ['uber', 'ola', 'rapido', 'metro', 'railway', 'irctc', 'petrol', 
+                          'fuel', 'parking', 'redbus', 'mmrda', 'train', 'bus']
+    if any(word in desc_lower for word in transport_keywords):
+        return 'Transportation', 'Cab/Metro/Train'
     
     # Entertainment
-    if any(word in description_lower for word in ['netflix', 'amazon prime', 'hotstar', 'spotify', 'movie', 'cinema', 'pvr', 'inox']):
+    entertainment_keywords = ['netflix', 'amazon prime', 'hotstar', 'spotify', 'movie', 
+                              'cinema', 'pvr', 'inox', 'ott play', 'kukufm', 'gaming']
+    if any(word in desc_lower for word in entertainment_keywords):
         return 'Entertainment', 'Streaming/Movies'
     
     # Bills & Utilities
-    if any(word in description_lower for word in ['electricity', 'water', 'gas', 'broadband', 'internet', 'mobile', 'recharge', 'jio', 'airtel', 'vi']):
+    bills_keywords = ['electricity', 'water', 'gas', 'broadband', 'internet', 'mobile', 
+                      'recharge', 'jio', 'airtel', 'vi', 'prepaid', 'postpaid', 'payments bank']
+    if any(word in desc_lower for word in bills_keywords):
         return 'Bills & Utilities', 'Mobile/Internet'
     
     # Healthcare
-    if any(word in description_lower for word in ['pharma', 'medicine', 'hospital', 'clinic', 'doctor', 'apollo', 'medplus']):
-        return 'Healthcare', 'Medicines'
+    health_keywords = ['pharma', 'medicine', 'hospital', 'clinic', 'doctor', 'medical', 
+                       'apollo', 'medplus', 'chemist', 'druggist']
+    if any(word in desc_lower for word in health_keywords):
+        return 'Healthcare', 'Medicines/Doctor'
+    
+    # Education
+    education_keywords = ['physicswallah', 'iit', 'college', 'university', 'course', 
+                          'tuition', 'coaching', 'openai', 'chatgpt']
+    if any(word in desc_lower for word in education_keywords):
+        return 'Education', 'Courses/Fees'
+    
+    # Fitness
+    fitness_keywords = ['gym', 'fitness', 'sports', 'yoga', 'workout', 'banga sports']
+    if any(word in desc_lower for word in fitness_keywords):
+        return 'Personal Care', 'Fitness/Gym'
+    
+    # Personal (Individual names - likely friends/family)
+    if any(word in desc_lower for word in ['ishika', 'aviral', 'twinkle', 'salahuddin', 
+                                            'gaurav', 'dev mahendra', 'briz']):
+        return 'Personal', 'Friends/Family'
     
     # Default
     return 'Uncategorized', 'Uncategorized'
 
 
 # =========================================================
-# STREAMLIT UI FOR PDF UPLOAD
+# STREAMLIT UI
 # =========================================================
 
 st.title("📄 GPay PDF Statement Extractor")
 
 st.markdown("""
-Upload your Google Pay PDF statement and we'll automatically extract all transactions!
+Upload your Google Pay PDF statement and automatically extract all transactions!
 
 **Features:**
-- Auto-extracts Date, Description, and Amount
-- Auto-categorizes transactions (Food, Shopping, Transport, etc.)
-- Exports to Excel format ready for the dashboard
+- ✅ Auto-extracts Date, Description, Amount, Type
+- ✅ Auto-categorizes transactions intelligently
+- ✅ Exports to Excel format ready for dashboard
+- ✅ Filters out rewards & self-transfers
 """)
 
-uploaded_pdf = st.file_uploader("Upload GPay PDF Statement", type=['pdf'])
+st.markdown("---")
+
+uploaded_pdf = st.file_uploader("📎 Upload GPay PDF Statement", type=['pdf'])
 
 if uploaded_pdf:
-    with st.spinner("Extracting transactions from PDF..."):
+    with st.spinner("🔄 Extracting transactions from PDF..."):
         try:
             df = extract_gpay_transactions(uploaded_pdf)
             
             if not df.empty:
-                st.success(f"✅ Extracted {len(df)} transactions!")
+                st.success(f"✅ Successfully extracted **{len(df)} transactions**!")
                 
-                # Show preview
-                st.markdown("### 📊 Preview")
-                st.dataframe(df, use_container_width=True)
-                
-                # Summary
-                col1, col2, col3 = st.columns(3)
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Total Transactions", len(df))
                 with col2:
-                    st.metric("Total Amount", f"₹{df['Amount'].sum():,.0f}")
+                    total_expense = df[df['Type'] == 'Expense']['Amount'].sum()
+                    st.metric("Total Expenses", f"₹{total_expense:,.0f}")
                 with col3:
-                    st.metric("Date Range", f"{df['Date'].min().strftime('%d %b')} - {df['Date'].max().strftime('%d %b')}")
+                    total_income = df[df['Type'] == 'Income']['Amount'].sum()
+                    st.metric("Total Income", f"₹{total_income:,.0f}")
+                with col4:
+                    date_range = f"{df['Date'].min().strftime('%d %b')} - {df['Date'].max().strftime('%d %b')}"
+                    st.metric("Date Range", date_range)
+                
+                st.markdown("---")
+                
+                # Preview
+                st.markdown("### 📊 Transaction Preview")
+                st.dataframe(df.head(20), use_container_width=True)
                 
                 # Category breakdown
-                st.markdown("### 📈 Category Breakdown")
-                cat_summary = df.groupby('Category')['Amount'].sum().reset_index()
-                cat_summary = cat_summary.sort_values('Amount', ascending=False)
-                st.dataframe(cat_summary, use_container_width=True)
+                st.markdown("### 📈 Category Summary")
+                col1, col2 = st.columns(2)
                 
-                # Allow editing
+                with col1:
+                    expenses = df[df['Type'] == 'Expense']
+                    if not expenses.empty:
+                        cat_summary = expenses.groupby('Category')['Amount'].sum().reset_index()
+                        cat_summary = cat_summary.sort_values('Amount', ascending=False)
+                        cat_summary['Amount'] = cat_summary['Amount'].apply(lambda x: f"₹{x:,.0f}")
+                        st.dataframe(cat_summary, use_container_width=True, hide_index=True)
+                
+                with col2:
+                    # Top merchants
+                    st.markdown("**Top 10 Merchants**")
+                    top_merchants = expenses.groupby('Description')['Amount'].sum().reset_index()
+                    top_merchants = top_merchants.sort_values('Amount', ascending=False).head(10)
+                    top_merchants['Amount'] = top_merchants['Amount'].apply(lambda x: f"₹{x:,.0f}")
+                    st.dataframe(top_merchants, use_container_width=True, hide_index=True)
+                
+                st.markdown("---")
+                
+                # Edit categories
                 st.markdown("### ✏️ Edit Categories (Optional)")
-                edited_df = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+                st.info("💡 You can edit the categories below before downloading")
+                edited_df = st.data_editor(df, use_container_width=True, num_rows="fixed")
                 
-                # Download as Excel
-                st.markdown("### 💾 Download")
+                # Download
+                st.markdown("### 💾 Download Excel")
                 
                 buffer = BytesIO()
                 edited_df.to_excel(buffer, index=False)
                 buffer.seek(0)
                 
+                filename = f"gpay_transactions_{df['Date'].min().strftime('%Y%m')}_to_{df['Date'].max().strftime('%Y%m')}.xlsx"
+                
                 st.download_button(
-                    label="📥 Download as Excel",
+                    label="📥 Download Excel File",
                     data=buffer,
-                    file_name=f"gpay_transactions_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    file_name=filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
                 )
                 
-                st.info("💡 Upload this Excel file to your Google Drive folder to include it in your dashboard!")
+                st.success("✅ Upload this Excel file to your Google Drive folder to include it in your dashboard!")
                 
             else:
                 st.error("❌ No transactions found in the PDF. Please check the file format.")
+                st.info("💡 Make sure you're uploading a valid Google Pay transaction statement PDF")
                 
         except Exception as e:
             st.error(f"❌ Error processing PDF: {str(e)}")
-            st.info("💡 Make sure you're uploading a valid Google Pay statement PDF")
+            st.info("💡 Please make sure you're uploading a Google Pay statement PDF")
+
+else:
+    st.info("👆 Upload your GPay PDF statement to get started")
 
 st.markdown("---")
-st.markdown("**Note:** This extractor works with standard GPay statement formats. If your PDF format is different, contact support.")
+st.markdown("**📝 Note:** This tool works with standard GPay transaction statement PDFs. Rewards and self-transfers are automatically filtered out.")
