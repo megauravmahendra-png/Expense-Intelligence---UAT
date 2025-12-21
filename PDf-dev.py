@@ -716,187 +716,181 @@ with tab2:
             unsafe_allow_html=True
         )
     
-    left,right = st.columns([1.4,1])
+    left, right = st.columns([1.4, 1])
     
     with left:
-    
-    left,right = st.columns([1.4,1])
+        st.markdown("#### 📉 Budget Burn-down")
+        budget = st.number_input("Monthly Budget", value=30000, step=1000)
+        days = calendar.monthrange(
+            int(selected_month.split("-")[0]),
+            int(selected_month.split("-")[1])
+        )[1]
+        daily = (
+            non_bill_df.groupby(date_col)[amt_col]
+            .sum()
+            .reindex(pd.date_range(month_df[date_col].min(),
+                                   month_df[date_col].max()), fill_value=0)
+            .cumsum()
+            .reset_index()
+        )
+        daily.columns = ["Date", "Actual"]
+        ideal = np.linspace(0, budget, days)
+        fig = px.line(daily, x="Date", y="Actual", template="plotly_dark")
+        fig.add_scatter(
+            x=pd.date_range(daily["Date"].min(), periods=days),
+            y=ideal, name="Ideal"
+        )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
-with left:
-    st.markdown("#### 📉 Budget Burn-down")
-    budget = st.number_input("Monthly Budget", value=30000, step=1000)
-    days = calendar.monthrange(
-        int(selected_month.split("-")[0]),
-        int(selected_month.split("-")[1])
-    )[1]
-    daily = (
-        non_bill_df.groupby(date_col)[amt_col]
-        .sum()
-        .reindex(pd.date_range(month_df[date_col].min(),
-                                month_df[date_col].max()), fill_value=0)
-        .cumsum()
-        .reset_index()
-    )
-    daily.columns = ["Date","Actual"]
-    ideal = np.linspace(0, budget, days)
-    fig = px.line(daily, x="Date", y="Actual", template="plotly_dark")
-    fig.add_scatter(
-        x=pd.date_range(daily["Date"].min(), periods=days),
-        y=ideal, name="Ideal"
-    )
-    fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-    st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+    with right:
+        st.markdown("#### 🧩 Expense Composition")
+        
+        chart_df = month_df.copy()
+        total_monthly = chart_df[amt_col].sum()
+        
+        cat_sums = chart_df.groupby("Category")[amt_col].sum()
+        
+        chart_df["Category Label"] = chart_df["Category"].apply(
+            lambda x: f"{x} ({cat_sums.get(x, 0) / total_monthly:.1%})" if total_monthly > 0 else x
+        )
+        
+        fig = px.treemap(
+            chart_df,
+            path=["Category Label", "Sub Category"],
+            values=amt_col,
+            template="plotly_dark"
+        )
+        
+        fig.update_traces(
+            textinfo="label+value+percent root",
+            texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
+        )
+        
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
-with right:
-    st.markdown("#### 🧩 Expense Composition")
-    
-    chart_df = month_df.copy()
-    total_monthly = chart_df[amt_col].sum()
-    
-    cat_sums = chart_df.groupby("Category")[amt_col].sum()
-    
-    chart_df["Category Label"] = chart_df["Category"].apply(
-        lambda x: f"{x} ({cat_sums.get(x, 0) / total_monthly:.1%})" if total_monthly > 0 else x
-    )
-    
-    fig = px.treemap(
-        chart_df,
-        path=["Category Label", "Sub Category"],
-        values=amt_col,
-        template="plotly_dark"
-    )
-    
-    fig.update_traces(
-        textinfo="label+value+percent root",
-        texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
-    )
-    
-    fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-    st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+    st.markdown("#### 📆 Spending Pattern")
+    c1,c2 = st.columns(2)
 
-st.markdown("#### 📆 Spending Pattern")
-c1,c2 = st.columns(2)
+    with c1:
+        fig = px.bar(
+            month_df.groupby("Category")[amt_col].sum().reset_index(),
+            x="Category", y=amt_col,
+            template="plotly_dark", title="Category vs Amount"
+        )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
-with c1:
-    fig = px.bar(
-        month_df.groupby("Category")[amt_col].sum().reset_index(),
-        x="Category", y=amt_col,
-        template="plotly_dark", title="Category vs Amount"
-    )
-    fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-    st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+    with c2:
+        fig = px.bar(
+            month_df.groupby(date_col)[amt_col].sum().reset_index(),
+            x=date_col, y=amt_col,
+            template="plotly_dark", title="Amount vs Day"
+        )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
-with c2:
-    fig = px.bar(
-        month_df.groupby(date_col)[amt_col].sum().reset_index(),
-        x=date_col, y=amt_col,
-        template="plotly_dark", title="Amount vs Day"
-    )
-    fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-    st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+    st.markdown("### 📅 Weekday vs Weekend Behaviour")
+    f1,f2,f3 = st.columns([1.2,1.2,1])
 
-st.markdown("### 📅 Weekday vs Weekend Behaviour")
-f1,f2,f3 = st.columns([1.2,1.2,1])
+    with f1:
+        with st.popover("Filter Category"):
+            selected_categories = [
+                cat for cat in sorted(month_df["Category"].unique())
+                if st.checkbox(cat, value=True, key=f"cat_{cat}")
+            ]
 
-with f1:
-    with st.popover("Filter Category"):
-        selected_categories = [
-            cat for cat in sorted(month_df["Category"].unique())
-            if st.checkbox(cat, value=True, key=f"cat_{cat}")
-        ]
+    filtered = month_df[month_df["Category"].isin(selected_categories)]
 
-filtered = month_df[month_df["Category"].isin(selected_categories)]
+    with f2:
+        with st.popover("Filter Sub Category"):
+            selected_subcategories = [
+                sub for sub in sorted(filtered["Sub Category"].unique())
+                if st.checkbox(sub, value=True, key=f"sub_{sub}")
+            ]
 
-with f2:
-    with st.popover("Filter Sub Category"):
-        selected_subcategories = [
-            sub for sub in sorted(filtered["Sub Category"].unique())
-            if st.checkbox(sub, value=True, key=f"sub_{sub}")
-        ]
+    filtered = filtered[filtered["Sub Category"].isin(selected_subcategories)]
 
-filtered = filtered[filtered["Sub Category"].isin(selected_subcategories)]
+    with f3:
+        metric = st.selectbox("Metric", ["Total Spend","Average Spend (per calendar day)"])
 
-with f3:
-    metric = st.selectbox("Metric", ["Total Spend","Average Spend (per calendar day)"])
+    if metric == "Total Spend":
+        day_metric = filtered.groupby("Weekday")[amt_col].sum()
+    else:
+        day_metric = (
+            filtered.groupby([date_col,"Weekday"])[amt_col].sum()
+            .reset_index().groupby("Weekday")[amt_col].mean()
+        )
 
-if metric == "Total Spend":
-    day_metric = filtered.groupby("Weekday")[amt_col].sum()
-else:
-    day_metric = (
-        filtered.groupby([date_col,"Weekday"])[amt_col].sum()
-        .reset_index().groupby("Weekday")[amt_col].mean()
-    )
+    day_metric = day_metric.reindex(WEEK_ORDER).reset_index()
 
-day_metric = day_metric.reindex(WEEK_ORDER).reset_index()
+    c1,c2 = st.columns([2.2,1])
 
-c1,c2 = st.columns([2.2,1])
+    with c1:
+        fig = px.bar(day_metric, x="Weekday", y=amt_col, template="plotly_dark",
+               title=f"{metric} by Day")
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
-with c1:
-    fig = px.bar(day_metric, x="Weekday", y=amt_col, template="plotly_dark",
-           title=f"{metric} by Day")
-    fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-    st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-
-with c2:
-    fig = px.bar(filtered.groupby("WeekType")[amt_col].mean().reset_index(),
-           x="WeekType", y=amt_col, template="plotly_dark",
-           title="Weekday vs Weekend")
-    fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-    st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-
-
-
+    with c2:
+        fig = px.bar(filtered.groupby("WeekType")[amt_col].mean().reset_index(),
+               x="WeekType", y=amt_col, template="plotly_dark",
+               title="Weekday vs Weekend")
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
 
 # =========================================================
 # TAB 3 — INSIGHTS
 # =========================================================
 with tab3:
-st.markdown("### 💡 Smart Insights")
+    st.markdown("### 💡 Smart Insights")
 
-insights = generate_insights(month_df, previous_month_df, amt_col)
+    insights = generate_insights(month_df, previous_month_df, amt_col)
 
-for insight in insights:
-    st.markdown(f"""
-    <div class="insight-box">
-        <div class="insight-text">{insight}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
+    for insight in insights:
+        st.markdown(f"""
+        <div class="insight-box">
+            <div class="insight-text">{insight}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # =========================================================
 # TAB 4 — INTELLIGENCE
-# ==================================================
-
+# =========================================================
 with tab4:
-st.markdown("### 🧠 Signals & Risks")
+    st.markdown("### 🧠 Signals & Risks")
 
-st.markdown("#### 🔁 Recurring (Uncategorized)")
-recurring = (
-    df[df["Category"]=="Uncategorized"]
-    .groupby("Description")[amt_col]
-    .agg(["count","mean","std"])
-    .reset_index()
-)
-recurring = recurring[(recurring["count"]>=3)&((recurring["std"]/recurring["mean"])<0.1)]
-st.dataframe(recurring, use_container_width=True)
+    st.markdown("#### 🔁 Recurring (Uncategorized)")
+    recurring = (
+        df[df["Category"]=="Uncategorized"]
+        .groupby("Description")[amt_col]
+        .agg(["count","mean","std"])
+        .reset_index()
+    )
+    
+    if not recurring.empty:
+        recurring = recurring[(recurring["count"]>=3)&((recurring["std"]/recurring["mean"])<0.1)]
+        st.dataframe(recurring, use_container_width=True)
+    else:
+        st.write("No recurring uncategorized items found.")
 
-st.markdown("#### 🚨 Large Expenses (> ₹3000)")
-alerts = df[(df["Category"]!="Bill Payment")&(df[amt_col]>3000)]
-st.dataframe(alerts[[date_col,"Description",amt_col]], use_container_width=True)
-
+    st.markdown("#### 🚨 Large Expenses (> ₹3000)")
+    alerts = df[(df["Category"]!="Bill Payment")&(df[amt_col]>3000)]
+    st.dataframe(alerts[[date_col,"Description",amt_col]], use_container_width=True)
 
 # =========================================================
 # TAB 5 — EXPORT
 # =========================================================
 with tab5:
-buf = BytesIO()
-df.sort_values(date_col).to_excel(buf, index=False)
-buf.seek(0)
-st.download_button(
-"Download Clean Excel",
-data=buf,
-file_name="expense_intelligence_clean.xlsx"
-)
+    buf = BytesIO()
+    df.sort_values(date_col).to_excel(buf, index=False)
+    buf.seek(0)
+    st.download_button(
+        "Download Clean Excel",
+        data=buf,
+        file_name="expense_intelligence_clean.xlsx"
+    )
+
 st.markdown("---")
-st.markdown("<div class='subtle'>Built for thinking, not panic.</div>", unsafe_allow_html=True)</parameter>
-        
+st.markdown("<div class='subtle'>Built for thinking, not panic.</div>", unsafe_allow_html=True)
