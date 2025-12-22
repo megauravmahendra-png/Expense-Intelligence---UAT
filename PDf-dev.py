@@ -47,9 +47,9 @@ def extract_gpay_transactions_from_pdf(pdf_file):
     
     transactions = []
     
-    # --- FIXED REGEX PATTERN (Captures ALL 6 FIELDS) ---
+    # --- REGEX PATTERN (Captures ALL 6 FIELDS) ---
     # 1. Date
-    # 2. Type (Paid to/Received from)
+    # 2. Type (Paid to/Received from/Self transfer to)
     # 3. Description (Name)
     # 4. Amount
     # 5. Transaction ID
@@ -60,7 +60,7 @@ def extract_gpay_transactions_from_pdf(pdf_file):
     
     for match in matches:
         try:
-            # We expect exactly 6 groups now. If regex misses one, this try/except handles it.
+            # Safety check: We expect 6 groups.
             if len(match) != 6:
                 continue
                 
@@ -87,6 +87,7 @@ def extract_gpay_transactions_from_pdf(pdf_file):
 
             # --- 4. CLEAN DESCRIPTION ---
             description = description_raw.strip()
+            # Clean up common artifacts
             description = description.split('UPI Transaction')[0].strip()
             description = re.sub(r'\s+', ' ', description)
             
@@ -143,7 +144,7 @@ def categorize_transaction(description, amount, logic_sheet_df):
             if not merchant:
                 continue
             
-            # Fuzzy Match
+            # Fuzzy Match using Token Set Ratio (Smartest for partial matches)
             score = fuzz.token_set_ratio(desc_search, merchant)
             
             if score > best_match_score:
