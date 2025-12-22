@@ -93,11 +93,20 @@ def parse_gpay_pdf(pdf_file):
             st.write(f"- 'Selftransfer' found: {full_text.count('Selftransfer')} times")
             
             # Show a sample of received transactions in raw text
-            received_samples = re.findall(r'.{0,50}Received.{0,100}', full_text, re.IGNORECASE)[:3]
+            received_samples = re.findall(r'.{0,50}Received.{0,150}', full_text, re.IGNORECASE)[:5]
             if received_samples:
                 st.write("\nSample 'Received' text patterns:")
-                for sample in received_samples:
-                    st.text(sample)
+                for idx, sample in enumerate(received_samples):
+                    st.text(f"{idx+1}. {sample}")
+            
+            # Show how dates are being split
+            st.write("\n\nSample date splits (first 3):")
+            date_pattern = r'(\d{2}[A-Z][a-z]{2},\d{4})'
+            parts = re.split(date_pattern, full_text)
+            for i in range(1, min(7, len(parts)), 2):
+                if i+1 < len(parts):
+                    st.write(f"\nDate: {parts[i]}")
+                    st.text(f"Content (first 200 chars): {parts[i+1][:200]}")
         
         # Pattern to match transactions with concatenated text
         # Example: "01Oct,2025 PaidtoSudamaSupane ₹26 10:01AM UPITransactionID:564069511552 PaidbyCanaraBank7191"
