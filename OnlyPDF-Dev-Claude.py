@@ -161,15 +161,17 @@ def parse_gpay_pdf(pdf_file):
                     name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
                     name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', name)
             
-            # Extract amount
-            amount_match = re.search(r'₹([\d,]+\.?\d*)', content)
+            # Extract amount (get the first amount after transaction type)
             amount = 0
-            if amount_match:
-                amount = float(amount_match.group(1).replace(',', ''))
-                if transaction_type == "Received":
-                    amount = amount
-                elif transaction_type in ["Paid", "Self Transfer"]:
-                    amount = -amount
+            if transaction_type:
+                # Find amount that comes after the transaction type mention
+                amount_match = re.search(r'₹([\d,]+\.?\d*)', content)
+                if amount_match:
+                    amount = float(amount_match.group(1).replace(',', ''))
+                    # Keep positive for Received, negative for Paid/Self Transfer
+                    if transaction_type in ["Paid", "Self Transfer"]:
+                        amount = -amount
+                    # For Received, keep it positive (no change needed)
             
             # Extract UPI Transaction ID
             upi_match = re.search(r'UPITransactionID:(\d+)', content)
@@ -195,6 +197,9 @@ def parse_gpay_pdf(pdf_file):
                     'bank': bank,
                     'amount': amount
                 })
+            elif transaction_type:  # Debug: transaction found but amount is 0
+                # This helps us see if transactions are being skipped
+                pass
         
         return transactions
     
@@ -249,6 +254,15 @@ if uploaded_file is not None:
         transactions = parse_gpay_pdf(uploaded_file)
         
         st.write(f"🔍 Found {len(transactions)} transactions")
+        
+        # Debug: Show received transactions count
+        received_count = sum(1 for t in transactions if t['type'] == 'Received')
+        st.write(f"💰 Received transactions: {received_count}")
+        if received_count > 0:
+            st.write("Sample received transactions:")
+            for t in transactions[:5]:
+                if t['type'] == 'Received':
+                    st.write(f"  - {t['date']} from {t['name']}: ₹{t['amount']}")
         
         if transactions:
             df = create_dataframe(transactions)
