@@ -119,25 +119,26 @@ def parse_gpay_pdf(pdf_file):
             transaction_type = ""
             name = ""
             
-            if 'Paidto' in content:
+            # Check for all possible transaction type patterns (case variations)
+            if 'Paidto' in content or 'PaidTo' in content or 'Paid to' in content:
                 transaction_type = "Paid"
-                # Extract name between "Paidto" and "₹"
-                name_match = re.search(r'Paidto([^₹]+)', content)
+                # Extract name between "Paidto" and "₹" or "UPI"
+                name_match = re.search(r'Paid[tT]o\s*([^₹UPI]+)', content)
                 if name_match:
                     name = name_match.group(1).strip()
                     # Add spaces before capital letters
                     name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
                     name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', name)
-            elif 'Receivedfrom' in content:
+            elif 'Receivedfrom' in content or 'ReceivedFrom' in content or 'Received from' in content:
                 transaction_type = "Received"
-                name_match = re.search(r'Receivedfrom([^₹]+)', content)
+                name_match = re.search(r'Received[fF]rom\s*([^₹UPI]+)', content)
                 if name_match:
                     name = name_match.group(1).strip()
                     name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
                     name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', name)
-            elif 'Selftransferto' in content:
+            elif 'Selftransfer' in content or 'SelfTransfer' in content or 'Self transfer' in content:
                 transaction_type = "Self Transfer"
-                name_match = re.search(r'Selftransferto([^₹]+)', content)
+                name_match = re.search(r'Self[tT]ransfer[tT]o\s*([^₹UPI]+)', content)
                 if name_match:
                     name = name_match.group(1).strip()
                     name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
