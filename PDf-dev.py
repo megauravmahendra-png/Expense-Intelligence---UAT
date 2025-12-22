@@ -47,40 +47,36 @@ def extract_gpay_transactions_from_pdf(pdf_file):
     
     transactions = []
     
-    # --- REGEX PATTERN EXPLAINED ---
-    # 1. Date: (\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}) -> Matches "01 Oct, 2025"
-    # 2. Time (Optional): (?:\d{1,2}:\d{2}\s*[AP]M)? -> Matches "10:01 AM" (non-capturing group mostly, we capture later if needed)
-    # 3. Type & Desc: (Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s*(.*?) -> Matches "Paid to ZEPTONOW"
-    # 4. Amount: ₹\s*([\d,]+\.?\d*) -> Matches "₹26" or "₹1,000"
-    # 5. ID: UPI Transaction ID:\s*(\d+) -> Matches the 12-digit ID
-    # 6. Bank: (?:Paid\s*(?:by|to)\s*(.*?))? -> Matches "Paid by Canara Bank 7191"
+    # Pattern to capture Date, Type, Description, Amount, ID, Bank
+    pattern = r'(\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}).*?(Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s+(.*?)(?:\s+UPI|\s+₹).*?₹\s*([\d,]+\.?\d*)'
     
-    # We use re.DOTALL so '.' matches newlines, allowing us to capture multi-line blocks
-    pattern = r'(\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}).*?(Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s+(.*?)(?:\s+UPI|\s+₹).*?₹\s*([\d,]+\.?\d*).*?UPI Transaction ID:\s*(\d+)(?:.*?Paid\s*(?:by|to)\s*(.*?))?'
+    # We first find the main blocks, then extract ID and Bank from the context if possible
+    # Using a broader capture to get the context for ID and Bank
+    raw_blocks = re.findall(pattern, all_text, re.DOTALL | re.IGNORECASE)
     
-    # Find all matches in the text block
-    matches = re.findall(pattern, all_text, re.DOTALL | re.IGNORECASE)
+    # Since regex can be tricky with variable spacing in PDFs, we iterate the text again or refine the capture
+    # Improved Strategy: Split text by "Paid to" or "Received from" markers roughly or use the robust regex below
+    
+    full_pattern = r'(\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}).*?(Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s+(.*?)(?:\s+UPI|\s+₹).*?₹\s*([\d,]+\.?\d*).*?UPI Transaction ID:\s*(\d+)(?:.*?Paid\s*(?:by|to)\s*(.*?))?'
+    
+    matches = re.findall(full_pattern, all_text, re.DOTALL | re.IGNORECASE)
     
     for match in matches:
         try:
             date_str, type_str, description_raw, amount_str, trans_id, bank_raw = match
             
             # --- 1. IGNORE SELF TRANSFERS ---
-            # Check both the type string and description for "Self transfer"
             full_check = (type_str + " " + description_raw).lower().replace(' ', '')
             if 'selftransfer' in full_check:
                 continue
             
             # --- 2. PARSE DATE ---
-            # Remove commas and clean up
             date_clean = re.sub(r'[^\d\w]', ' ', date_str).strip()
-            # Standardize spacing (e.g., "01 Oct  2025" -> "01 Oct 2025")
             date_clean = re.sub(r'\s+', ' ', date_clean)
             try:
                 date = datetime.strptime(date_clean, '%d %b %Y')
             except ValueError:
-                # Fallback for "01 Oct, 2025" format
-                date = datetime.strptime(date_clean, '%d %b %Y')
+                continue # Skip if date fails
 
             # --- 3. PARSE AMOUNT ---
             amount_clean = amount_str.replace(',', '').strip()
@@ -89,14 +85,10 @@ def extract_gpay_transactions_from_pdf(pdf_file):
                 continue
 
             # --- 4. CLEAN DESCRIPTION ---
-            # Description often contains newlines or "UPI..." text if regex grabbed too much
             description = description_raw.strip()
-            # Remove "UPI Transaction ID" if it accidentally got into description
             description = description.split('UPI Transaction')[0].strip()
-            # Remove extra spaces
             description = re.sub(r'\s+', ' ', description)
             
-            # Skip if description is too short/empty
             if len(description) < 2:
                 continue
                 
@@ -117,24 +109,22 @@ def extract_gpay_transactions_from_pdf(pdf_file):
                 'Description': description,
                 'Amount': amount,
                 'Type': transaction_type,
-                'Transaction ID': trans_id,  # Useful for deduplication
+                'Transaction ID': trans_id,
                 'Bank': bank
             })
             
         except Exception as e:
-            # print(f"Error parsing row: {e}") # Debugging
             continue
     
     # Create DataFrame
     df = pd.DataFrame(transactions)
     
-    # Remove duplicates based on Transaction ID (Very accurate)
+    # Remove duplicates
     if not df.empty:
         if 'Transaction ID' in df.columns:
             df = df.drop_duplicates(subset=['Transaction ID'], keep='first')
         else:
             df = df.drop_duplicates(subset=['Date', 'Description', 'Amount'], keep='first')
-            
         df = df.sort_values('Date')
     
     return df
@@ -142,29 +132,24 @@ def extract_gpay_transactions_from_pdf(pdf_file):
 def categorize_transaction(description, amount, logic_sheet_df):
     """Categorize transaction using smart fuzzy matching"""
     
-    # 1. Fuzzy Matching against Logic Sheet
     if not logic_sheet_df.empty and fuzz is not None:
         best_match_score = 0
         best_match_row = None
-        
-        # Lowercase description for better matching
         desc_search = str(description).lower()
         
         for idx, row in logic_sheet_df.iterrows():
-            # Force string conversion
             merchant = str(row.get('Merchant', '')).strip().lower()
-            
             if not merchant:
                 continue
             
-            # Use TOKEN SET RATIO (Best for partial matches like "Uber Rides" matching "Uber")
+            # Fuzzy Match
             score = fuzz.token_set_ratio(desc_search, merchant)
             
             if score > best_match_score:
                 best_match_score = score
                 best_match_row = row
         
-        # Threshold set to 70 (Less strict)
+        # Threshold: 70
         if best_match_score >= 70 and best_match_row is not None:
             sub_cat = str(best_match_row.get('Subcategory', 'Yet to Name'))
             return (
@@ -172,11 +157,10 @@ def categorize_transaction(description, amount, logic_sheet_df):
                 sub_cat
             )
     
-    # 2. Heuristic Rules (Fallback)
+    # Fallback Rules
     desc_lower = description.lower()
-    
-    # Transport: Small amounts (₹15-₹50) OR transport keywords
     transport_keywords = ['rapido', 'auto', 'ola', 'uber', 'metro', 'mmrda', 'railway', 'irctc', 'train', 'bus']
+    
     if (15 <= amount <= 50) or any(kw in desc_lower for kw in transport_keywords):
         if any(kw in desc_lower for kw in ['metro', 'mmrda']):
             return ('Transport', 'Metro')
@@ -185,7 +169,6 @@ def categorize_transaction(description, amount, logic_sheet_df):
         else:
             return ('Transport', 'Auto')
     
-    # Default: Uncategorized
     return ('Misc', 'Yet to Name')
 
 def process_pdf_data(pdf_files, logic_sheet_df):
@@ -204,20 +187,17 @@ def process_pdf_data(pdf_files, logic_sheet_df):
     if not all_transactions:
         return pd.DataFrame()
     
-    # Combine all PDFs
     combined_df = pd.concat(all_transactions, ignore_index=True)
     
-    # Check for Transaction ID column availability for robust deduplication across files
     if 'Transaction ID' in combined_df.columns:
         combined_df = combined_df.drop_duplicates(subset=['Transaction ID'], keep='first')
     
-    # Categorize each transaction
+    # Categorize
     combined_df['Category'] = 'Misc'
     combined_df['Sub Category'] = 'Yet to Name'
     
-    # Pass the loaded logic sheet to the categorizer
     for idx, row in combined_df.iterrows():
-        # Skip received transactions (Income)
+        # Tag Income but EXCLUDE later
         if row['Type'] == 'Received':
             combined_df.at[idx, 'Category'] = 'Income'
             combined_df.at[idx, 'Sub Category'] = 'Received'
@@ -230,7 +210,7 @@ def process_pdf_data(pdf_files, logic_sheet_df):
             combined_df.at[idx, 'Category'] = category
             combined_df.at[idx, 'Sub Category'] = subcategory
     
-    # Filter out received transactions for expense tracking
+    # FILTER: Keep only 'Sent' transactions (Expenses)
     expense_df = combined_df[combined_df['Type'] == 'Sent'].copy()
     expense_df = expense_df.drop('Type', axis=1)
     
@@ -251,119 +231,43 @@ def load_credentials():
         return None
 
 def login_page():
-    """Beautiful login page"""
-    
     st.markdown("""
     <style>
-    .login-container {
-        max-width: 450px;
-        margin: 100px auto;
-        padding: 50px 40px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 24px;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    }
-    .login-title {
-        font-size: 2.5rem;
-        font-weight: 800;
-        text-align: center;
-        color: white;
-        margin-bottom: 10px;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
-    }
-    .login-subtitle {
-        text-align: center;
-        color: rgba(255,255,255,0.9);
-        margin-bottom: 40px;
-        font-size: 1rem;
-    }
-    .stTextInput > div > div > input {
-        background: rgba(255,255,255,0.2);
-        border: 2px solid rgba(255,255,255,0.3);
-        border-radius: 12px;
-        color: white;
-        font-size: 1rem;
-        padding: 12px 16px;
-    }
-    .stTextInput > div > div > input:focus {
-        border-color: rgba(255,255,255,0.8);
-        box-shadow: 0 0 0 3px rgba(255,255,255,0.1);
-    }
-    .stTextInput > label {
-        color: white !important;
-        font-weight: 600;
-        font-size: 0.9rem;
-    }
-    .login-button > button {
-        width: 100%;
-        background: white;
-        color: #667eea;
-        font-weight: 700;
-        font-size: 1.1rem;
-        padding: 14px;
-        border-radius: 12px;
-        border: none;
-        margin-top: 20px;
-        transition: all 0.3s;
-    }
-    .login-button > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-    }
-    .creator-text {
-        text-align: center;
-        color: rgba(255,255,255,0.8);
-        margin-top: 30px;
-        font-size: 0.9rem;
-        font-style: italic;
-    }
+    .login-container { max-width: 450px; margin: 100px auto; padding: 50px 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+    .login-title { font-size: 2.5rem; font-weight: 800; text-align: center; color: white; margin-bottom: 10px; }
+    .login-subtitle { text-align: center; color: rgba(255,255,255,0.9); margin-bottom: 40px; font-size: 1rem; }
+    .stTextInput > div > div > input { background: rgba(255,255,255,0.2); border: 2px solid rgba(255,255,255,0.3); border-radius: 12px; color: white; font-size: 1rem; padding: 12px 16px; }
+    .stTextInput > label { color: white !important; font-weight: 600; font-size: 0.9rem; }
+    .login-button > button { width: 100%; background: white; color: #667eea; font-weight: 700; font-size: 1.1rem; padding: 14px; border-radius: 12px; border: none; margin-top: 20px; }
     </style>
     """, unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
-    
     with col2:
-        st.markdown('<div class="login-container">', unsafe_allow_html=True)
-        st.markdown('<div class="login-title">💳 Expense Intelligence</div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-subtitle">Designed for awareness, not anxiety</div>', unsafe_allow_html=True)
-        
-        username = st.text_input("Username", placeholder="Enter your username", key="login_user")
-        password = st.text_input("Password", type="password", placeholder="Enter your password", key="login_pass")
-        
-        st.markdown('<div class="login-button">', unsafe_allow_html=True)
-        login_btn = st.button("🔐 Login", use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        if login_btn:
+        st.markdown('<div class="login-container"><div class="login-title">💳 Expense Intelligence</div><div class="login-subtitle">Designed for awareness, not anxiety</div>', unsafe_allow_html=True)
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
+        if st.button("🔐 Login", use_container_width=True):
             if username and password:
-                credentials = load_credentials()
-                
-                if credentials is not None:
-                    user_match = credentials[
-                        (credentials['User Name'].str.strip() == username.strip()) & 
-                        (credentials['Password'].astype(str).str.strip() == password.strip())
-                    ]
-                    
+                creds = load_credentials()
+                if creds is not None:
+                    user_match = creds[(creds['User Name'].str.strip() == username.strip()) & (creds['Password'].astype(str).str.strip() == password.strip())]
                     if not user_match.empty:
-                        excel_link = user_match.iloc[0].get('Excel Google Drive Data Link', '')
-                        pdf_link = user_match.iloc[0].get('PDF Google Drive Data Link', '')
-                        logic_link = user_match.iloc[0].get('Logic Sheet', '')
-                        
-                        st.session_state['authenticated'] = True
-                        st.session_state['username'] = username
-                        st.session_state['excel_drive_link'] = str(excel_link).strip() if pd.notna(excel_link) else ''
-                        st.session_state['pdf_drive_link'] = str(pdf_link).strip() if pd.notna(pdf_link) else ''
-                        st.session_state['logic_sheet_link'] = str(logic_link).strip() if pd.notna(logic_link) else ''
+                        row = user_match.iloc[0]
+                        st.session_state.update({
+                            'authenticated': True,
+                            'username': username,
+                            'excel_drive_link': str(row.get('Excel Google Drive Data Link', '')).strip(),
+                            'pdf_drive_link': str(row.get('PDF Google Drive Data Link', '')).strip(),
+                            'logic_sheet_link': str(row.get('Logic Sheet', '')).strip()
+                        })
                         st.rerun()
                     else:
                         st.error("❌ Incorrect username or password")
             else:
                 st.warning("⚠️ Please enter both username and password")
-        
-        st.markdown('<div class="creator-text">Created by Gaurav Mahendra</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-# Check authentication
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 
@@ -372,55 +276,16 @@ if not st.session_state['authenticated']:
     st.stop()
 
 # =========================================================
-# UI THEME (AFTER LOGIN)
+# UI THEME
 # =========================================================
 st.markdown("""
 <style>
 body { background:#0b1220; color:#e5e7eb; }
-.section-box {
-    background:#0f172a;
-    border:1px solid #1e293b;
-    border-radius:18px;
-    padding:22px;
-    margin-bottom:24px;
-}
-.card {
-    background:#111827;
-    border:1px solid #1f2937;
-    border-radius:16px;
-    padding:18px;
-    transition:0.25s;
-}
-.card:hover {
-    transform:translateY(-4px);
-    box-shadow:0 10px 24px rgba(0,0,0,0.35);
-}
-.kpi-title {
-    font-size:0.7rem;
-    letter-spacing:0.08em;
-    color:#9ca3af;
-    text-transform:uppercase;
-}
-.kpi-value {
-    font-size:1.8rem;
-    font-weight:700;
-}
-.subtle {
-    color:#9ca3af;
-    font-size:0.85rem;
-}
-.insight-box {
-    background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-    border-radius: 16px;
-    padding: 20px;
-    margin: 10px 0;
-    color: white;
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-}
-.insight-text {
-    font-size: 1rem;
-    line-height: 1.6;
-}
+.card { background:#111827; border:1px solid #1f2937; border-radius:16px; padding:18px; transition:0.25s; }
+.card:hover { transform:translateY(-4px); box-shadow:0 10px 24px rgba(0,0,0,0.35); }
+.kpi-title { font-size:0.7rem; letter-spacing:0.08em; color:#9ca3af; text-transform:uppercase; }
+.kpi-value { font-size:1.8rem; font-weight:700; }
+.insight-box { background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); border-radius: 16px; padding: 20px; margin: 10px 0; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -430,13 +295,11 @@ body { background:#0b1220; color:#e5e7eb; }
 col1, col2 = st.columns([6, 1])
 with col1:
     st.markdown("## 💳 Expense Intelligence - UAT")
-    st.markdown("<div class='subtle'>Designed for awareness, not anxiety</div>", unsafe_allow_html=True)
 with col2:
     st.markdown(f"**👤 {st.session_state['username']}**")
     if st.button("🚪 Logout"):
         st.session_state['authenticated'] = False
         st.rerun()
-
 st.markdown("---")
 
 # =========================================================
@@ -445,307 +308,125 @@ st.markdown("---")
 def detect(df, keys):
     for c in df.columns:
         for k in keys:
-            if k.lower() in c.lower():
-                return c
+            if k.lower() in c.lower(): return c
     return None
 
 def format_month(m):
     return pd.to_datetime(m + "-01").strftime("%B %y")
 
 def get_chart_config():
-    return {
-        'displayModeBar': False,
-        'scrollZoom': False,
-        'doubleClick': False,
-        'dragMode': False,
-        'staticPlot': False,
-        'displaylogo': False,
-        'modeBarButtonsToRemove': ['zoom', 'pan', 'select', 'lasso', 'zoomIn', 'zoomOut', 'autoScale', 'resetScale']
-    }
+    return {'displayModeBar': False}
 
 def download_from_gdrive_folder(folder_id):
     temp_dir = Path("temp_data")
-    
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
-    
+    if temp_dir.exists(): shutil.rmtree(temp_dir)
     temp_dir.mkdir(exist_ok=True)
-    folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
-    
     try:
-        gdown.download_folder(folder_url, output=str(temp_dir), quiet=False, use_cookies=False, remaining_ok=True)
+        gdown.download_folder(f"https://drive.google.com/drive/folders/{folder_id}", output=str(temp_dir), quiet=False, use_cookies=False, remaining_ok=True)
         return temp_dir
-    except Exception as e:
-        return None
+    except: return None
 
 def extract_folder_id_from_link(link):
-    if not link or pd.isna(link):
-        return None
-    
+    if not link or pd.isna(link): return None
     link = str(link).strip()
-    
-    if '/folders/' in link:
-        try:
-            folder_id = link.split('/folders/')[1].split('?')[0].strip()
-            return folder_id
-        except:
-            return None
-    
-    if len(link) > 20 and '/' not in link:
-        return link
-    
-    return None
+    if '/folders/' in link: return link.split('/folders/')[1].split('?')[0].strip()
+    return link if len(link) > 20 and '/' not in link else None
 
 def load_logic_sheet(link):
-    """Load categorization logic with SMART COLUMN DETECTION and GID support"""
-    if not link or pd.isna(link):
-        st.sidebar.warning("⚠️ Logic Sheet Link is missing")
-        return pd.DataFrame()
-    
+    if not link or pd.isna(link): return pd.DataFrame()
     try:
-        # Extract sheet ID from link
-        if '/d/' in link:
-            sheet_id = link.split('/d/')[1].split('/')[0]
-        else:
-            sheet_id = link
-            
-        # Extract GID (Sheet Tab ID) if present
-        gid_param = ""
-        if 'gid=' in link:
-            try:
-                gid = link.split('gid=')[1].split('&')[0].split('#')[0]
-                gid_param = f"&gid={gid}"
-            except:
-                pass
+        sheet_id = link.split('/d/')[1].split('/')[0] if '/d/' in link else link
+        gid_param = f"&gid={link.split('gid=')[1].split('&')[0].split('#')[0]}" if 'gid=' in link else ""
+        df = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_param}")
         
-        # Construct export URL
-        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_param}"
-        
-        df = pd.read_csv(url)
-        
-        if df.empty:
-            st.sidebar.warning("⚠️ Logic Sheet downloaded but is empty.")
-            return df
-            
-        # --- SMART READER LOGIC ---
-        # 1. Normalize all existing columns (lowercase, remove spaces/hyphens)
+        if df.empty: return df
         clean_cols = {c.lower().replace(' ', '').replace('-', '').replace('_', ''): c for c in df.columns}
-        
-        # 2. Define standard names and possible variations
         mapping = {
-            'Merchant': ['merchant', 'name', 'party', 'description', 'payee'],
+            'Merchant': ['merchant', 'name', 'party', 'description'],
             'Category': ['category', 'cat', 'type'],
-            'Subcategory': ['subcategory', 'sub-category', 'sub category', 'sub']
+            'Subcategory': ['subcategory', 'sub-category', 'sub category']
         }
-        
         rename_dict = {}
-        
-        # 3. Find matches
-        for standard, variations in mapping.items():
-            for var in variations:
-                clean_var = var.replace(' ', '').replace('-', '')
-                if clean_var in clean_cols:
-                    # Map the actual column name to the standard name
-                    actual_col_name = clean_cols[clean_var]
-                    rename_dict[actual_col_name] = standard
+        for std, vars_ in mapping.items():
+            for v in vars_:
+                clean_v = v.replace(' ', '')
+                if clean_v in clean_cols:
+                    rename_dict[clean_cols[clean_v]] = std
                     break
+        if rename_dict: df = df.rename(columns=rename_dict)
         
-        # 4. Rename columns
-        if rename_dict:
-            df = df.rename(columns=rename_dict)
-        
-        # 5. Verify minimal requirement (Merchant + Category)
-        required_cols = ['Merchant', 'Category']
-        found_cols = [c for c in required_cols if c in df.columns]
-        
-        # DEBUG DISPLAY
-        with st.sidebar.expander("🐞 Logic Sheet Status", expanded=True):
-            if len(found_cols) == len(required_cols):
-                st.success(f"✅ Loaded {len(df)} rules")
-                # Add Debug Tool inside the sidebar
-                st.markdown("---")
-                st.write("🔎 **Test Your Logic**")
-                test_txt = st.text_input("Type a merchant name...", placeholder="e.g. Swiggy")
-                if test_txt and fuzz:
-                    best_s = 0
-                    best_r = None
-                    for _, r in df.iterrows():
-                        mer = str(r['Merchant']).lower()
-                        sc = fuzz.token_set_ratio(test_txt.lower(), mer)
-                        if sc > best_s:
-                            best_s = sc
-                            best_r = r
-                    
-                    st.write(f"Best Match: **{best_r['Merchant']}**")
-                    st.write(f"Score: **{best_s}**")
-                    if best_s >= 70:
-                        st.success(f"✅ Matched: {best_r['Category']}")
-                    else:
-                        st.error("❌ No Match (<70)")
-            else:
-                st.error("❌ Missing Columns")
-                st.write(f"Found: {list(df.columns)}")
-                st.write(f"Need: {required_cols}")
-        
-        # Force string type on Merchant to ensure matching works
-        if 'Merchant' in df.columns:
-            df['Merchant'] = df['Merchant'].astype(str)
-            
+        if 'Merchant' in df.columns: df['Merchant'] = df['Merchant'].astype(str)
         return df
-        
-    except Exception as e:
-        st.sidebar.error(f"❌ Logic Sheet Error: {str(e)[:100]}")
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
-def generate_insights(current_month_df, previous_month_df, amt_col):
+def generate_insights(current, prev, amt_col):
     insights = []
+    curr_tot = current[amt_col].sum()
+    prev_tot = prev[amt_col].sum() if not prev.empty else 0
     
-    current_total = current_month_df[amt_col].sum()
-    prev_total = previous_month_df[amt_col].sum() if not previous_month_df.empty else 0
+    if prev_tot > 0:
+        pct = ((curr_tot - prev_tot) / prev_tot) * 100
+        if pct > 10: insights.append(f"💸 Spending increased by {pct:.1f}% (₹{curr_tot:,.0f} vs ₹{prev_tot:,.0f})")
+        elif pct < -10: insights.append(f"✅ You saved {abs(pct):.1f}% (₹{curr_tot:,.0f} vs ₹{prev_tot:,.0f})")
     
-    if prev_total > 0:
-        pct_change = ((current_total - prev_total) / prev_total) * 100
-        if pct_change > 10:
-            insights.append(f"💸 Your spending increased by {pct_change:.1f}% compared to last month (₹{current_total:,.0f} vs ₹{prev_total:,.0f})")
-        elif pct_change < -10:
-            insights.append(f"✅ Great job! You saved {abs(pct_change):.1f}% compared to last month (₹{current_total:,.0f} vs ₹{prev_total:,.0f})")
-        else:
-            insights.append(f"📊 Your spending is stable at ₹{current_total:,.0f}, similar to last month (₹{prev_total:,.0f})")
-    
-    current_cat = current_month_df.groupby("Category")[amt_col].sum()
-    prev_cat = previous_month_df.groupby("Category")[amt_col].sum() if not previous_month_df.empty else pd.Series()
-    
-    for cat in current_cat.index:
-        if cat in prev_cat.index and prev_cat[cat] > 0:
-            cat_change = ((current_cat[cat] - prev_cat[cat]) / prev_cat[cat]) * 100
-            if cat_change > 25:
-                insights.append(f"⚠️ {cat} spending jumped by {cat_change:.1f}% (₹{current_cat[cat]:,.0f} vs ₹{prev_cat[cat]:,.0f})")
-    
-    weekend_avg = current_month_df[current_month_df["WeekType"] == "Weekend"].groupby(current_month_df[detect(current_month_df, ["date"])])[amt_col].sum().mean()
-    weekday_avg = current_month_df[current_month_df["WeekType"] == "Weekday"].groupby(current_month_df[detect(current_month_df, ["date"])])[amt_col].sum().mean()
-    
-    if weekend_avg > weekday_avg * 1.3:
-        insights.append(f"🎉 You spend {((weekend_avg/weekday_avg - 1) * 100):.0f}% more on weekends (₹{weekend_avg:,.0f} vs ₹{weekday_avg:,.0f} per day)")
-    
-    top_expense = current_month_df.nlargest(1, amt_col).iloc[0]
-    insights.append(f"🔝 Your largest expense was ₹{top_expense[amt_col]:,.0f} on {top_expense['Description']}")
+    top = current.nlargest(1, amt_col).iloc[0] if not current.empty else None
+    if top is not None: insights.append(f"🔝 Largest expense: ₹{top[amt_col]:,.0f} on {top['Description']}")
     
     return insights
 
 WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 
 # =========================================================
-# DATA SOURCE TOGGLE
+# DATA LOADING
 # =========================================================
 with st.sidebar:
     st.markdown("### 📂 Data Source")
     data_mode = st.radio("", ["📊 Excel/CSV Database", "📄 PDF Database"])
 
-# Load Logic Sheet (Smartly)
 logic_sheet_df = load_logic_sheet(st.session_state.get('logic_sheet_link', ''))
-
 dfs = []
 
 if data_mode == "📊 Excel/CSV Database":
-    # EXCEL/CSV MODE (Original logic)
-    excel_link = st.session_state.get('excel_drive_link', '')
-    
-    if not excel_link:
-        st.sidebar.error("📁 Excel Drive link is missing")
-        st.stop()
-    
-    folder_id = extract_folder_id_from_link(excel_link)
-    
-    if not folder_id:
-        st.sidebar.error("⚠️ Invalid Google Drive link")
-        st.stop()
-    
-    st.sidebar.info(f"📁 Syncing Excel/CSV from Drive")
-    
-    if st.sidebar.button("🔄 Sync Now") or 'excel_loaded' not in st.session_state:
-        with st.spinner("Downloading Excel/CSV files..."):
-            temp_dir = download_from_gdrive_folder(folder_id)
-            
-            if temp_dir is None:
-                st.error("⚠️ Could not access Google Drive folder")
-                st.stop()
-            
-            excel_files = list(temp_dir.glob("*.xlsx")) + list(temp_dir.glob("*.csv"))
-            excel_files = [f for f in excel_files if not f.name.startswith("~$")]
-            
-            if not excel_files:
-                st.warning("📂 No Excel/CSV files found")
-                st.stop()
-            
-            for f in excel_files:
-                try:
-                    if f.suffix == '.csv':
-                        dfs.append(pd.read_csv(f))
-                    else:
-                        dfs.append(pd.read_excel(f))
-                except Exception as e:
-                    st.warning(f"Skipped: {f.name}")
-            
-            if dfs:
-                st.session_state['excel_loaded'] = True
-                st.session_state['excel_dfs'] = dfs
-                st.sidebar.success(f"✅ Loaded {len(dfs)} files")
-    
-    if 'excel_dfs' in st.session_state:
-        dfs = st.session_state['excel_dfs']
+    fid = extract_folder_id_from_link(st.session_state.get('excel_drive_link', ''))
+    if fid:
+        if st.sidebar.button("🔄 Sync Now") or 'excel_loaded' not in st.session_state:
+            with st.spinner("Syncing..."):
+                td = download_from_gdrive_folder(fid)
+                if td:
+                    files = list(td.glob("*.xlsx")) + list(td.glob("*.csv"))
+                    for f in files:
+                        try: dfs.append(pd.read_csv(f) if f.suffix=='.csv' else pd.read_excel(f))
+                        except: pass
+                    if dfs:
+                        st.session_state['excel_loaded'] = True
+                        st.session_state['excel_dfs'] = dfs
+                        st.sidebar.success(f"Loaded {len(dfs)} files")
+    if 'excel_dfs' in st.session_state: dfs = st.session_state['excel_dfs']
 
-else:  # PDF MODE
-    pdf_link = st.session_state.get('pdf_drive_link', '')
-    
-    if not pdf_link:
-        st.sidebar.error("📁 PDF Drive link is missing")
-        st.stop()
-    
-    folder_id = extract_folder_id_from_link(pdf_link)
-    
-    if not folder_id:
-        st.sidebar.error("⚠️ Invalid Google Drive link")
-        st.stop()
-    
-    st.sidebar.info(f"📄 Syncing PDFs from Drive")
-    
-    if st.sidebar.button("🔄 Sync Now") or 'pdf_loaded' not in st.session_state:
-        with st.spinner("Downloading and processing PDFs..."):
-            temp_dir = download_from_gdrive_folder(folder_id)
-            
-            if temp_dir is None:
-                st.error("⚠️ Could not access Google Drive folder")
-                st.stop()
-            
-            pdf_files = list(temp_dir.glob("*.pdf"))
-            
-            if not pdf_files:
-                st.warning("📂 No PDF files found")
-                st.stop()
-            
-            # Process all PDFs
-            pdf_df = process_pdf_data(pdf_files, logic_sheet_df)
-            
-            if pdf_df.empty:
-                st.error("❌ No transactions extracted from PDFs")
-                st.stop()
-            
-            dfs = [pdf_df]
-            st.session_state['pdf_loaded'] = True
-            st.session_state['pdf_dfs'] = dfs
-            st.sidebar.success(f"✅ Processed {len(pdf_files)} PDFs, {len(pdf_df)} transactions")
-    
-    if 'pdf_dfs' in st.session_state:
-        dfs = st.session_state['pdf_dfs']
+else:
+    fid = extract_folder_id_from_link(st.session_state.get('pdf_drive_link', ''))
+    if fid:
+        if st.sidebar.button("🔄 Sync Now") or 'pdf_loaded' not in st.session_state:
+            with st.spinner("Processing PDFs..."):
+                td = download_from_gdrive_folder(fid)
+                if td:
+                    files = list(td.glob("*.pdf"))
+                    pdf_df = process_pdf_data(files, logic_sheet_df)
+                    if not pdf_df.empty:
+                        dfs = [pdf_df]
+                        st.session_state['pdf_loaded'] = True
+                        st.session_state['pdf_dfs'] = dfs
+                        st.sidebar.success(f"Processed {len(files)} PDFs")
+    if 'pdf_dfs' in st.session_state: dfs = st.session_state['pdf_dfs']
 
 if not dfs:
-    st.info("📁 Click 'Sync Now' to load data")
+    st.info("Please Click 'Sync Now' in the sidebar to load data.")
     st.stop()
 
 df = pd.concat(dfs, ignore_index=True)
 
 # =========================================================
-# DATA PREP
+# DASHBOARD
 # =========================================================
 date_col = detect(df, ["date"])
 amt_col = detect(df, ["amount"])
@@ -762,250 +443,45 @@ df["Month"] = df[date_col].dt.to_period("M").astype(str)
 df["Weekday"] = df[date_col].dt.day_name()
 df["WeekType"] = np.where(df[date_col].dt.weekday >= 5, "Weekend", "Weekday")
 
-# =========================================================
-# FILTERS
-# =========================================================
 months = sorted(df["Month"].unique())
-selected_month = st.sidebar.selectbox(
-    "Month",
-    months,
-    index=len(months)-1,
-    format_func=format_month
-)
+selected_month = st.sidebar.selectbox("Month", months, index=len(months)-1, format_func=format_month)
 
 month_df = df[df["Month"] == selected_month]
 non_bill_df = month_df[month_df["Category"] != "Bill Payment"]
+prev_df = df[df["Month"] == months[months.index(selected_month)-1]] if months.index(selected_month)>0 else pd.DataFrame()
 
-current_month_idx = months.index(selected_month)
-previous_month_df = df[df["Month"] == months[current_month_idx - 1]] if current_month_idx > 0 else pd.DataFrame()
+tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "📅 Monthly", "💡 Insights", "📤 Export"])
 
-# =========================================================
-# TABS
-# =========================================================
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📈 Trends",
-    "📅 Monthly View",
-    "💡 Insights",
-    "🧠 Intelligence",
-    "📤 Export"
-])
-
-# =========================================================
-# TAB 1 — TRENDS
-# =========================================================
 with tab1:
-    st.markdown("### 📈 Long-term Trends")
     c1, c2 = st.columns(2)
-    
-    with c2:
+    with c1:
         monthly = df.groupby("Month")[amt_col].sum().reset_index()
-        fig = px.line(monthly, x="Month", y=amt_col, markers=True,
-                template="plotly_dark", title="Total Monthly Spend")
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-    
-    with c1:
+        st.plotly_chart(px.line(monthly, x="Month", y=amt_col, template="plotly_dark", title="Total Monthly Spend"), use_container_width=True)
+    with c2:
         cat_trend = df.groupby(["Month","Category"])[amt_col].sum().reset_index()
-        fig = px.line(cat_trend, x="Month", y=amt_col, color="Category",
-                template="plotly_dark", title="Category-wise Trend")
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+        st.plotly_chart(px.line(cat_trend, x="Month", y=amt_col, color="Category", template="plotly_dark", title="Category Trend"), use_container_width=True)
 
-# =========================================================
-# TAB 2 — MONTHLY VIEW
-# =========================================================
 with tab2:
-    st.markdown(f"### 📅 {format_month(selected_month)} Overview")
+    k1,k2,k3 = st.columns(3)
+    k1.metric("Total Spend", f"₹{month_df[amt_col].sum():,.0f}")
+    k2.metric("Daily Avg", f"₹{non_bill_df.groupby(date_col)[amt_col].sum().mean():,.0f}")
+    k3.metric("Top Category", non_bill_df.groupby("Category")[amt_col].sum().idxmax() if not non_bill_df.empty else "-")
     
-    k1,k2,k3,k4 = st.columns(4)
-    kpis = [
-        (k1,"Total Spend",month_df[amt_col].sum()),
-        (k2,"Excl. Bills",non_bill_df[amt_col].sum()),
-        (k3,"Daily Avg",non_bill_df.groupby(date_col)[amt_col].sum().mean()),
-        (k4,"Top Category",non_bill_df.groupby("Category")[amt_col].sum().idxmax() if not non_bill_df.empty else "N/A")
-    ]
-    for col,title,val in kpis:
-        display = f"₹{val:,.0f}" if isinstance(val,(int,float,np.number)) else str(val)
-        col.markdown(
-            f"<div class='card'><div class='kpi-title'>{title}</div><div class='kpi-value'>{display}</div></div>",
-            unsafe_allow_html=True
-        )
-    
-    left, right = st.columns([1.4, 1])
-    
-    with left:
-        st.markdown("#### 📉 Budget Burn-down")
-        budget = st.number_input("Monthly Budget", value=30000, step=1000)
-        days = calendar.monthrange(
-            int(selected_month.split("-")[0]),
-            int(selected_month.split("-")[1])
-        )[1]
-        daily = (
-            non_bill_df.groupby(date_col)[amt_col]
-            .sum()
-            .reindex(pd.date_range(month_df[date_col].min(),
-                                   month_df[date_col].max()), fill_value=0)
-            .cumsum()
-            .reset_index()
-        )
-        daily.columns = ["Date", "Actual"]
-        ideal = np.linspace(0, budget, days)
-        fig = px.line(daily, x="Date", y="Actual", template="plotly_dark")
-        fig.add_scatter(
-            x=pd.date_range(daily["Date"].min(), periods=days),
-            y=ideal, name="Ideal"
-        )
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-
-    with right:
-        st.markdown("#### 🧩 Expense Composition")
-        
-        chart_df = month_df.copy()
-        total_monthly = chart_df[amt_col].sum()
-        
-        cat_sums = chart_df.groupby("Category")[amt_col].sum()
-        
-        chart_df["Category Label"] = chart_df["Category"].apply(
-            lambda x: f"{x} ({cat_sums.get(x, 0) / total_monthly:.1%})" if total_monthly > 0 else x
-        )
-        
-        fig = px.treemap(
-            chart_df,
-            path=["Category Label", "Sub Category"],
-            values=amt_col,
-            template="plotly_dark"
-        )
-        
-        fig.update_traces(
-            textinfo="label+value+percent root",
-            texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
-        )
-        
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-
-    st.markdown("#### 📆 Spending Pattern")
-    c1,c2 = st.columns(2)
-
+    c1, c2 = st.columns([1.5, 1])
     with c1:
-        fig = px.bar(
-            month_df.groupby("Category")[amt_col].sum().reset_index(),
-            x="Category", y=amt_col,
-            template="plotly_dark", title="Category vs Amount"
-        )
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-
+        budget = st.number_input("Budget", value=30000, step=1000)
+        daily = non_bill_df.groupby(date_col)[amt_col].sum().cumsum().reset_index()
+        fig = px.line(daily, x=date_col, y=amt_col, template="plotly_dark", title="Budget Burndown")
+        fig.add_hline(y=budget, line_dash="dot", annotation_text="Budget")
+        st.plotly_chart(fig, use_container_width=True)
     with c2:
-        fig = px.bar(
-            month_df.groupby(date_col)[amt_col].sum().reset_index(),
-            x=date_col, y=amt_col,
-            template="plotly_dark", title="Amount vs Day"
-        )
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+        st.plotly_chart(px.pie(month_df, names="Category", values=amt_col, template="plotly_dark", title="Composition"), use_container_width=True)
 
-    st.markdown("### 📅 Weekday vs Weekend Behaviour")
-    f1,f2,f3 = st.columns([1.2,1.2,1])
-
-    with f1:
-        with st.popover("Filter Category"):
-            selected_categories = [
-                cat for cat in sorted(month_df["Category"].unique())
-                if st.checkbox(cat, value=True, key=f"cat_{cat}")
-            ]
-
-    filtered = month_df[month_df["Category"].isin(selected_categories)]
-
-    with f2:
-        with st.popover("Filter Sub Category"):
-            selected_subcategories = [
-                sub for sub in sorted(filtered["Sub Category"].unique())
-                if st.checkbox(sub, value=True, key=f"sub_{sub}")
-            ]
-
-    filtered = filtered[filtered["Sub Category"].isin(selected_subcategories)]
-
-    with f3:
-        metric = st.selectbox("Metric", ["Total Spend","Average Spend (per calendar day)"])
-
-    if metric == "Total Spend":
-        day_metric = filtered.groupby("Weekday")[amt_col].sum()
-    else:
-        day_metric = (
-            filtered.groupby([date_col,"Weekday"])[amt_col].sum()
-            .reset_index().groupby("Weekday")[amt_col].mean()
-        )
-
-    day_metric = day_metric.reindex(WEEK_ORDER).reset_index()
-
-    c1,c2 = st.columns([2.2,1])
-
-    with c1:
-        fig = px.bar(day_metric, x="Weekday", y=amt_col, template="plotly_dark",
-               title=f"{metric} by Day")
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-
-    with c2:
-        fig = px.bar(filtered.groupby("WeekType")[amt_col].mean().reset_index(),
-               x="WeekType", y=amt_col, template="plotly_dark",
-               title="Weekday vs Weekend")
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-
-# =========================================================
-# TAB 3 — INSIGHTS
-# =========================================================
 with tab3:
-    st.markdown("### 💡 Smart Insights")
+    for i in generate_insights(month_df, prev_df, amt_col):
+        st.markdown(f"<div class='insight-box'>{i}</div>", unsafe_allow_html=True)
 
-    insights = generate_insights(month_df, previous_month_df, amt_col)
-
-    for insight in insights:
-        st.markdown(f"""
-        <div class="insight-box">
-            <div class="insight-text">{insight}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-# =========================================================
-# TAB 4 — INTELLIGENCE
-# =========================================================
 with tab4:
-    st.markdown("### 🧠 Signals & Risks")
-
-    st.markdown("#### 🔁 Recurring (Uncategorized)")
-    recurring = (
-        df[df["Category"]=="Uncategorized"]
-        .groupby("Description")[amt_col]
-        .agg(["count","mean","std"])
-        .reset_index()
-    )
-    
-    if not recurring.empty:
-        recurring = recurring[(recurring["count"]>=3)&((recurring["std"]/recurring["mean"])<0.1)]
-        st.dataframe(recurring, use_container_width=True)
-    else:
-        st.write("No recurring uncategorized items found.")
-
-    st.markdown("#### 🚨 Large Expenses (> ₹3000)")
-    alerts = df[(df["Category"]!="Bill Payment")&(df[amt_col]>3000)]
-    st.dataframe(alerts[[date_col,"Description",amt_col]], use_container_width=True)
-
-# =========================================================
-# TAB 5 — EXPORT
-# =========================================================
-with tab5:
     buf = BytesIO()
-    df.sort_values(date_col).to_excel(buf, index=False)
-    buf.seek(0)
-    st.download_button(
-        "Download Clean Excel",
-        data=buf,
-        file_name="expense_intelligence_clean.xlsx"
-    )
-
-st.markdown("---")
-st.markdown("<div class='subtle'>Built for thinking, not panic.</div>", unsafe_allow_html=True)
+    df.to_excel(buf, index=False)
+    st.download_button("Download Excel", data=buf.getvalue(), file_name="expenses.xlsx")
