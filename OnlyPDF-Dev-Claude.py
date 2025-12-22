@@ -4,7 +4,6 @@ import PyPDF2
 import re
 from datetime import datetime
 from io import BytesIO
-import pdfplumber
 
 # Page configuration
 st.set_page_config(
@@ -62,7 +61,7 @@ def get_day_of_week(date_str):
     except:
         return 'Unknown'
 
-# Enhanced PDF parsing function
+# Enhanced PDF parsing function for concatenated text
 def parse_gpay_pdf(pdf_file):
     transactions = []
     
@@ -82,88 +81,102 @@ def parse_gpay_pdf(pdf_file):
                 full_text += page.extract_text() + "\n"
         
         # Debug: Show extracted text sample
-        st.write("📄 PDF Text Sample (first 500 chars):")
-        st.text(full_text[:500])
+        with st.expander("📄 View PDF Text Sample"):
+            st.text(full_text[:1000])
         
-        lines = full_text.split('\n')
+        # Pattern to match transactions with concatenated text
+        # Example: "01Oct,2025 PaidtoSudamaSupane ₹26 10:01AM UPITransactionID:564069511552 PaidbyCanaraBank7191"
+        
+        # Split by date pattern to get individual transactions
+        date_pattern = r'(\d{2}[A-Z][a-z]{2},\d{4})'
+        parts = re.split(date_pattern, full_text)
         
         current_date = ""
-        current_time = ""
         
-        for i, line in enumerate(lines):
-            line = line.strip()
+        for i in range(1, len(parts), 2):
+            if i+1 >= len(parts):
+                break
+                
+            date_str = parts[i]  # e.g., "01Oct,2025"
+            content = parts[i+1]  # Rest of the transaction info
             
-            # Skip empty lines and headers
-            if not line or 'Transaction statement' in line or 'Page' in line or 'megauravmahendra' in line:
-                continue
-            
-            # Pattern 1: Date and Time on same line (e.g., "01 Oct, 2025 10:01 AM")
-            date_time_match = re.match(r'(\d{2}\s+\w{3},\s+\d{4})\s+(\d{1,2}:\d{2}\s+[AP]M)', line)
-            if date_time_match:
-                current_date = date_time_match.group(1)
-                current_time = date_time_match.group(2)
-                continue
-            
-            # Pattern 2: Date only
-            date_match = re.match(r'(\d{2}\s+\w{3},\s+\d{4})', line)
+            # Convert date format: "01Oct,2025" to "01 Oct, 2025"
+            date_match = re.match(r'(\d{2})([A-Z][a-z]{2}),(\d{4})', date_str)
             if date_match:
-                current_date = date_match.group(1)
+                current_date = f"{date_match.group(1)} {date_match.group(2)}, {date_match.group(3)}"
+            else:
                 continue
             
-            # Pattern 3: Time only
-            time_match = re.match(r'(\d{1,2}:\d{2}\s+[AP]M)', line)
-            if time_match:
-                current_time = time_match.group(1)
-                continue
+            # Extract time
+            time_match = re.search(r'(\d{1,2}:\d{2}[AP]M)', content)
+            time = time_match.group(1) if time_match else ""
             
-            # Look for transaction patterns
-            if any(keyword in line for keyword in ['Paid to', 'Received from', 'Self transfer']):
-                transaction = {
+            # Format time with space before AM/PM
+            if time:
+                time = re.sub(r'([AP]M)', r' \1', time)
+            
+            # Extract transaction type and name
+            transaction_type = ""
+            name = ""
+            
+            if 'Paidto' in content:
+                transaction_type = "Paid"
+                # Extract name between "Paidto" and "₹"
+                name_match = re.search(r'Paidto([^₹]+)', content)
+                if name_match:
+                    name = name_match.group(1).strip()
+                    # Add spaces before capital letters
+                    name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+                    name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', name)
+            elif 'Receivedfrom' in content:
+                transaction_type = "Received"
+                name_match = re.search(r'Receivedfrom([^₹]+)', content)
+                if name_match:
+                    name = name_match.group(1).strip()
+                    name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+                    name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', name)
+            elif 'Selftransferto' in content:
+                transaction_type = "Self Transfer"
+                name_match = re.search(r'Selftransferto([^₹]+)', content)
+                if name_match:
+                    name = name_match.group(1).strip()
+                    name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+                    name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', name)
+            
+            # Extract amount
+            amount_match = re.search(r'₹([\d,]+\.?\d*)', content)
+            amount = 0
+            if amount_match:
+                amount = float(amount_match.group(1).replace(',', ''))
+                if transaction_type == "Received":
+                    amount = amount
+                elif transaction_type in ["Paid", "Self Transfer"]:
+                    amount = -amount
+            
+            # Extract UPI Transaction ID
+            upi_match = re.search(r'UPITransactionID:(\d+)', content)
+            upi_id = upi_match.group(1) if upi_match else ""
+            
+            # Extract Bank
+            bank_match = re.search(r'(CanaraBank\d+|HDFCBank\d+)', content)
+            bank = ""
+            if bank_match:
+                bank_raw = bank_match.group(1)
+                # Add space: "CanaraBank7191" -> "Canara Bank 7191"
+                bank = re.sub(r'([a-z])([A-Z])', r'\1 \2', bank_raw)
+                bank = re.sub(r'([A-Z][a-z]+)([A-Z])', r'\1 \2', bank)
+                bank = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', bank)
+            
+            if current_date and transaction_type and amount != 0:
+                transactions.append({
                     'date': current_date,
-                    'time': current_time,
-                    'type': '',
-                    'name': '',
-                    'upi_id': '',
-                    'bank': '',
-                    'amount': 0
-                }
-                
-                # Determine transaction type and name
-                if 'Paid to' in line:
-                    transaction['type'] = 'Paid'
-                    transaction['name'] = line.replace('Paid to', '').strip()
-                elif 'Received from' in line:
-                    transaction['type'] = 'Received'
-                    transaction['name'] = line.replace('Received from', '').strip()
-                elif 'Self transfer' in line:
-                    transaction['type'] = 'Self Transfer'
-                    transaction['name'] = line.replace('Self transfer to', '').strip()
-                
-                # Look ahead for UPI ID, Bank, and Amount
-                for j in range(i+1, min(i+10, len(lines))):
-                    next_line = lines[j].strip()
-                    
-                    # UPI Transaction ID
-                    if 'UPI Transaction ID:' in next_line:
-                        transaction['upi_id'] = next_line.replace('UPI Transaction ID:', '').strip()
-                    
-                    # Bank account
-                    bank_match = re.search(r'(Canara Bank \d+|HDFC Bank \d+)', next_line)
-                    if bank_match:
-                        transaction['bank'] = bank_match.group(1)
-                    
-                    # Amount
-                    amount_match = re.search(r'₹\s*([\d,]+\.?\d*)', next_line)
-                    if amount_match:
-                        amount = float(amount_match.group(1).replace(',', ''))
-                        if transaction['type'] == 'Received':
-                            transaction['amount'] = amount
-                        else:
-                            transaction['amount'] = -amount
-                        break
-                
-                if transaction['date'] and transaction['amount'] != 0:
-                    transactions.append(transaction)
+                    'time': time,
+                    'type': transaction_type,
+                    'name': name,
+                    'upi_id': upi_id,
+                    'bank': bank,
+                    'amount': amount
+                })
         
         return transactions
     
