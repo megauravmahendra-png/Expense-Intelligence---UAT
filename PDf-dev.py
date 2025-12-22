@@ -47,22 +47,23 @@ def extract_gpay_transactions_from_pdf(pdf_file):
     
     transactions = []
     
-    # Pattern to capture Date, Type, Description, Amount, ID, Bank
-    pattern = r'(\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}).*?(Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s+(.*?)(?:\s+UPI|\s+₹).*?₹\s*([\d,]+\.?\d*)'
+    # --- FIXED REGEX PATTERN (Captures ALL 6 FIELDS) ---
+    # 1. Date
+    # 2. Type (Paid to/Received from)
+    # 3. Description (Name)
+    # 4. Amount
+    # 5. Transaction ID
+    # 6. Bank Name (Optional)
+    pattern = r'(\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}).*?(Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s+(.*?)(?:\s+UPI|\s+₹).*?₹\s*([\d,]+\.?\d*).*?UPI Transaction ID:\s*(\d+)(?:.*?Paid\s*(?:by|to)\s*(.*?))?'
     
-    # We first find the main blocks, then extract ID and Bank from the context if possible
-    # Using a broader capture to get the context for ID and Bank
-    raw_blocks = re.findall(pattern, all_text, re.DOTALL | re.IGNORECASE)
-    
-    # Since regex can be tricky with variable spacing in PDFs, we iterate the text again or refine the capture
-    # Improved Strategy: Split text by "Paid to" or "Received from" markers roughly or use the robust regex below
-    
-    full_pattern = r'(\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}).*?(Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s+(.*?)(?:\s+UPI|\s+₹).*?₹\s*([\d,]+\.?\d*).*?UPI Transaction ID:\s*(\d+)(?:.*?Paid\s*(?:by|to)\s*(.*?))?'
-    
-    matches = re.findall(full_pattern, all_text, re.DOTALL | re.IGNORECASE)
+    matches = re.findall(pattern, all_text, re.DOTALL | re.IGNORECASE)
     
     for match in matches:
         try:
+            # We expect exactly 6 groups now. If regex misses one, this try/except handles it.
+            if len(match) != 6:
+                continue
+                
             date_str, type_str, description_raw, amount_str, trans_id, bank_raw = match
             
             # --- 1. IGNORE SELF TRANSFERS ---
@@ -337,7 +338,8 @@ def load_logic_sheet(link):
     try:
         sheet_id = link.split('/d/')[1].split('/')[0] if '/d/' in link else link
         gid_param = f"&gid={link.split('gid=')[1].split('&')[0].split('#')[0]}" if 'gid=' in link else ""
-        df = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_param}")
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_param}"
+        df = pd.read_csv(url)
         
         if df.empty: return df
         clean_cols = {c.lower().replace(' ', '').replace('-', '').replace('_', ''): c for c in df.columns}
