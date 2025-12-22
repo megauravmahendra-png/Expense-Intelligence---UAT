@@ -137,25 +137,35 @@ def parse_gpay_pdf(pdf_file):
             # Check for all possible transaction type patterns (case variations)
             if 'Paidto' in content or 'PaidTo' in content or 'Paid to' in content:
                 transaction_type = "Paid"
-                # Extract name between "Paidto" and amount/UPI
-                name_match = re.search(r'Paid[tT]o([A-Z][a-zA-Z\s]*?)(?=\s*₹|\s*UPI|\s*\d{1,2}:)', content)
+                # Extract name: everything between "Paidto" and "₹"
+                name_match = re.search(r'Paid[tT]o([A-Za-z\s]+?)₹', content)
+                if not name_match:
+                    # Fallback: get everything after Paidto until UPI
+                    name_match = re.search(r'Paid[tT]o([A-Za-z\s]+?)UPI', content)
                 if name_match:
                     name = name_match.group(1).strip()
                     # Add spaces before capital letters
                     name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
                     name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', name)
+                    
             elif 'Receivedfrom' in content or 'ReceivedFrom' in content or 'Received from' in content:
                 transaction_type = "Received"
-                # Extract name between "Receivedfrom" and amount/UPI
-                name_match = re.search(r'Received[fF]rom([A-Z][a-zA-Z\s]*?)(?=\s*₹|\s*UPI|\s*\d{1,2}:)', content)
+                # Extract name: everything between "Receivedfrom" and "₹"
+                name_match = re.search(r'Received[fF]rom([A-Za-z\s]+?)₹', content)
+                if not name_match:
+                    # Fallback: get everything after Receivedfrom until UPI
+                    name_match = re.search(r'Received[fF]rom([A-Za-z\s]+?)UPI', content)
                 if name_match:
                     name = name_match.group(1).strip()
                     name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
                     name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', name)
+                    
             elif 'Selftransfer' in content or 'SelfTransfer' in content or 'Self transfer' in content:
                 transaction_type = "Self Transfer"
                 # Extract bank name for self transfers
-                name_match = re.search(r'Self[tT]ransfer[tT]o([A-Z][a-zA-Z\s]*?)(?=\s*₹|\s*UPI|\s*\d{1,2}:)', content)
+                name_match = re.search(r'Self[tT]ransfer[tT]o([A-Za-z\s]+?)₹', content)
+                if not name_match:
+                    name_match = re.search(r'Self[tT]ransfer[tT]o([A-Za-z\s]+?)UPI', content)
                 if name_match:
                     name = name_match.group(1).strip()
                     name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
