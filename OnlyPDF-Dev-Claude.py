@@ -82,7 +82,22 @@ def parse_gpay_pdf(pdf_file):
         
         # Debug: Show extracted text sample
         with st.expander("📄 View PDF Text Sample"):
-            st.text(full_text[:1000])
+            st.text(full_text[:2000])
+            
+        # Debug: Show what patterns we're finding
+        with st.expander("🔍 Debug: Transaction Patterns Found"):
+            st.write("Looking for patterns:")
+            st.write(f"- 'Paidto' found: {full_text.count('Paidto')} times")
+            st.write(f"- 'Receivedfrom' found: {full_text.count('Receivedfrom')} times")
+            st.write(f"- 'Received from' found: {full_text.count('Received from')} times")
+            st.write(f"- 'Selftransfer' found: {full_text.count('Selftransfer')} times")
+            
+            # Show a sample of received transactions in raw text
+            received_samples = re.findall(r'.{0,50}Received.{0,100}', full_text, re.IGNORECASE)[:3]
+            if received_samples:
+                st.write("\nSample 'Received' text patterns:")
+                for sample in received_samples:
+                    st.text(sample)
         
         # Pattern to match transactions with concatenated text
         # Example: "01Oct,2025 PaidtoSudamaSupane ₹26 10:01AM UPITransactionID:564069511552 PaidbyCanaraBank7191"
@@ -374,3 +389,4 @@ else:
         - **Category**: Auto-categorized spending category
         - **Notes**: Empty field for your personal notes
         """)
+        
