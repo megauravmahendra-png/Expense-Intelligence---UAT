@@ -4,6 +4,7 @@ import PyPDF2
 import re
 from datetime import datetime
 from io import BytesIO
+import pdfplumber
 
 # Page configuration
 st.set_page_config(
@@ -61,96 +62,115 @@ def get_day_of_week(date_str):
     except:
         return 'Unknown'
 
-# Parse PDF function
+# Enhanced PDF parsing function
 def parse_gpay_pdf(pdf_file):
     transactions = []
     
     try:
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
-        full_text = ""
+        # Try with pdfplumber first (better text extraction)
+        try:
+            import pdfplumber
+            with pdfplumber.open(pdf_file) as pdf:
+                full_text = ""
+                for page in pdf.pages:
+                    full_text += page.extract_text() + "\n"
+        except:
+            # Fallback to PyPDF2
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            full_text = ""
+            for page in pdf_reader.pages:
+                full_text += page.extract_text() + "\n"
         
-        # Extract text from all pages
-        for page in pdf_reader.pages:
-            full_text += page.extract_text()
+        # Debug: Show extracted text sample
+        st.write("📄 PDF Text Sample (first 500 chars):")
+        st.text(full_text[:500])
         
         lines = full_text.split('\n')
         
-        current_transaction = {}
-        i = 0
+        current_date = ""
+        current_time = ""
         
-        while i < len(lines):
-            line = lines[i].strip()
+        for i, line in enumerate(lines):
+            line = line.strip()
             
             # Skip empty lines and headers
-            if not line or 'Transaction statement' in line or 'Page' in line:
-                i += 1
+            if not line or 'Transaction statement' in line or 'Page' in line or 'megauravmahendra' in line:
                 continue
             
-            # Check for date pattern
+            # Pattern 1: Date and Time on same line (e.g., "01 Oct, 2025 10:01 AM")
+            date_time_match = re.match(r'(\d{2}\s+\w{3},\s+\d{4})\s+(\d{1,2}:\d{2}\s+[AP]M)', line)
+            if date_time_match:
+                current_date = date_time_match.group(1)
+                current_time = date_time_match.group(2)
+                continue
+            
+            # Pattern 2: Date only
             date_match = re.match(r'(\d{2}\s+\w{3},\s+\d{4})', line)
             if date_match:
-                # Save previous transaction if exists
-                if current_transaction.get('date'):
-                    transactions.append(current_transaction.copy())
-                
-                current_transaction = {
-                    'date': date_match.group(1),
-                    'time': '',
+                current_date = date_match.group(1)
+                continue
+            
+            # Pattern 3: Time only
+            time_match = re.match(r'(\d{1,2}:\d{2}\s+[AP]M)', line)
+            if time_match:
+                current_time = time_match.group(1)
+                continue
+            
+            # Look for transaction patterns
+            if any(keyword in line for keyword in ['Paid to', 'Received from', 'Self transfer']):
+                transaction = {
+                    'date': current_date,
+                    'time': current_time,
                     'type': '',
                     'name': '',
                     'upi_id': '',
                     'bank': '',
                     'amount': 0
                 }
-                i += 1
-                continue
-            
-            # Check for time
-            time_match = re.search(r'(\d{1,2}:\d{2}\s+[AP]M)', line)
-            if time_match and current_transaction.get('date'):
-                current_transaction['time'] = time_match.group(1)
-                i += 1
-                continue
-            
-            # Check for transaction type and name
-            if 'Paid to' in line:
-                current_transaction['type'] = 'Paid'
-                current_transaction['name'] = line.replace('Paid to', '').strip()
-            elif 'Received from' in line:
-                current_transaction['type'] = 'Received'
-                current_transaction['name'] = line.replace('Received from', '').strip()
-            elif 'Self transfer' in line:
-                current_transaction['type'] = 'Self Transfer'
-                current_transaction['name'] = line.replace('Self transfer to', '').strip()
-            
-            # Check for UPI ID
-            if 'UPI Transaction ID:' in line:
-                current_transaction['upi_id'] = line.replace('UPI Transaction ID:', '').strip()
-            
-            # Check for bank
-            bank_match = re.search(r'(Canara Bank \d+|HDFC Bank \d+)', line)
-            if bank_match:
-                current_transaction['bank'] = bank_match.group(1)
-            
-            # Check for amount
-            amount_match = re.search(r'₹([\d,]+\.?\d*)', line)
-            if amount_match:
-                amount = float(amount_match.group(1).replace(',', ''))
-                if current_transaction.get('type') == 'Received':
-                    current_transaction['amount'] = amount
-                elif current_transaction.get('type') in ['Paid', 'Self Transfer']:
-                    current_transaction['amount'] = -amount
-            
-            i += 1
-        
-        # Add last transaction
-        if current_transaction.get('date'):
-            transactions.append(current_transaction)
+                
+                # Determine transaction type and name
+                if 'Paid to' in line:
+                    transaction['type'] = 'Paid'
+                    transaction['name'] = line.replace('Paid to', '').strip()
+                elif 'Received from' in line:
+                    transaction['type'] = 'Received'
+                    transaction['name'] = line.replace('Received from', '').strip()
+                elif 'Self transfer' in line:
+                    transaction['type'] = 'Self Transfer'
+                    transaction['name'] = line.replace('Self transfer to', '').strip()
+                
+                # Look ahead for UPI ID, Bank, and Amount
+                for j in range(i+1, min(i+10, len(lines))):
+                    next_line = lines[j].strip()
+                    
+                    # UPI Transaction ID
+                    if 'UPI Transaction ID:' in next_line:
+                        transaction['upi_id'] = next_line.replace('UPI Transaction ID:', '').strip()
+                    
+                    # Bank account
+                    bank_match = re.search(r'(Canara Bank \d+|HDFC Bank \d+)', next_line)
+                    if bank_match:
+                        transaction['bank'] = bank_match.group(1)
+                    
+                    # Amount
+                    amount_match = re.search(r'₹\s*([\d,]+\.?\d*)', next_line)
+                    if amount_match:
+                        amount = float(amount_match.group(1).replace(',', ''))
+                        if transaction['type'] == 'Received':
+                            transaction['amount'] = amount
+                        else:
+                            transaction['amount'] = -amount
+                        break
+                
+                if transaction['date'] and transaction['amount'] != 0:
+                    transactions.append(transaction)
         
         return transactions
     
     except Exception as e:
         st.error(f"Error parsing PDF: {str(e)}")
+        import traceback
+        st.text(traceback.format_exc())
         return []
 
 # Convert to DataFrame
@@ -186,7 +206,7 @@ def convert_df_to_excel(df):
                 df[col].astype(str).map(len).max(),
                 len(col)
             )
-            worksheet.column_dimensions[chr(65 + idx)].width = max_length + 2
+            worksheet.column_dimensions[chr(65 + idx)].width = min(max_length + 2, 50)
     
     return output.getvalue()
 
@@ -196,6 +216,8 @@ uploaded_file = st.file_uploader("Upload Google Pay PDF Statement", type=['pdf']
 if uploaded_file is not None:
     with st.spinner('Processing PDF...'):
         transactions = parse_gpay_pdf(uploaded_file)
+        
+        st.write(f"🔍 Found {len(transactions)} transactions")
         
         if transactions:
             df = create_dataframe(transactions)
@@ -221,13 +243,14 @@ if uploaded_file is not None:
             st.subheader("📊 Spending by Category")
             category_df = df[df['Amount (₹)'] < 0].groupby('Category')['Amount (₹)'].sum().abs().sort_values(ascending=False)
             
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.bar_chart(category_df)
-            
-            with col2:
-                st.dataframe(category_df.reset_index().rename(columns={'Amount (₹)': 'Total Spent (₹)'}), use_container_width=True)
+            if not category_df.empty:
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    st.bar_chart(category_df)
+                
+                with col2:
+                    st.dataframe(category_df.reset_index().rename(columns={'Amount (₹)': 'Total Spent (₹)'}), use_container_width=True)
             
             # Display transactions table
             st.subheader("📋 Transaction Details")
@@ -297,6 +320,7 @@ if uploaded_file is not None:
         
         else:
             st.error("❌ No transactions found in the PDF. Please check the file format.")
+            st.info("💡 Tip: Make sure you're uploading a Google Pay transaction statement PDF")
 
 else:
     # Instructions
