@@ -32,7 +32,11 @@ st.set_page_config(
 # PDF EXTRACTION FUNCTIONS
 # =========================================================
 def extract_gpay_transactions_from_pdf(pdf_file):
-    """Extract transaction data from GPay PDF statement"""
+    """
+    Extract transaction data from GPay PDF statement.
+    Handles 'Date', 'Description', 'Amount', 'Transaction ID', 'Bank', and 'Time'.
+    Explicitly IGNORES 'Self transfer' transactions.
+    """
     
     # Read PDF
     pdf_reader = PyPDF2.PdfReader(pdf_file)
@@ -43,82 +47,94 @@ def extract_gpay_transactions_from_pdf(pdf_file):
     
     transactions = []
     
-    # Enhanced pattern to capture all transaction variations
-    pattern = r'(\d{1,2}\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s*\d{4}).*?((?:Paid\s*to|Received\s*from|Paidto|Receivedfrom|Paid to|Received from)\s*.*?)(?:UPI|upi).*?₹\s*([\d,]+\.?\d*)'
+    # --- REGEX PATTERN EXPLAINED ---
+    # 1. Date: (\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}) -> Matches "01 Oct, 2025"
+    # 2. Time (Optional): (?:\d{1,2}:\d{2}\s*[AP]M)? -> Matches "10:01 AM" (non-capturing group mostly, we capture later if needed)
+    # 3. Type & Desc: (Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s*(.*?) -> Matches "Paid to ZEPTONOW"
+    # 4. Amount: ₹\s*([\d,]+\.?\d*) -> Matches "₹26" or "₹1,000"
+    # 5. ID: UPI Transaction ID:\s*(\d+) -> Matches the 12-digit ID
+    # 6. Bank: (?:Paid\s*(?:by|to)\s*(.*?))? -> Matches "Paid by Canara Bank 7191"
     
+    # We use re.DOTALL so '.' matches newlines, allowing us to capture multi-line blocks
+    pattern = r'(\d{1,2}\s*[A-Za-z]{3},?\s*\d{4}).*?(Paid\s*to|Received\s*from|Self\s*transfer\s*to)\s+(.*?)(?:\s+UPI|\s+₹).*?₹\s*([\d,]+\.?\d*).*?UPI Transaction ID:\s*(\d+)(?:.*?Paid\s*(?:by|to)\s*(.*?))?'
+    
+    # Find all matches in the text block
     matches = re.findall(pattern, all_text, re.DOTALL | re.IGNORECASE)
     
     for match in matches:
         try:
-            date_str, full_desc, amount_str = match
+            date_str, type_str, description_raw, amount_str, trans_id, bank_raw = match
             
-            # Skip self-transfers
-            if 'self transfer' in full_desc.lower().replace(' ', ''):
+            # --- 1. IGNORE SELF TRANSFERS ---
+            # Check both the type string and description for "Self transfer"
+            full_check = (type_str + " " + description_raw).lower().replace(' ', '')
+            if 'selftransfer' in full_check:
                 continue
             
-            # Parse date
-            date_clean = re.sub(r'[^\d\w,]', '', date_str)
-            date_match = re.search(r'(\d{1,2})(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?(\d{4})', date_clean, re.IGNORECASE)
-            
-            if not date_match:
-                continue
-                
-            day, month, year = date_match.groups()
-            date = datetime.strptime(f"{day} {month} {year}", '%d %b %Y')
-            
-            # Determine transaction type
-            is_received = 'received' in full_desc.lower() or 'receivedfrom' in full_desc.lower().replace(' ', '')
-            transaction_type = 'Received' if is_received else 'Sent'
-            
-            # Extract merchant/person name
-            if is_received:
-                desc_match = re.search(r'(?:Received\s*from|Receivedfrom)\s*([A-Z][A-Za-z0-9\s]+?)(?=\s*UPI|\s*upi|Transaction)', full_desc, re.IGNORECASE)
-            else:
-                desc_match = re.search(r'(?:Paid\s*to|Paidto)\s*([A-Z][A-Za-z0-9\s]+?)(?=\s*UPI|\s*upi|Transaction)', full_desc, re.IGNORECASE)
-            
-            if desc_match:
-                description = desc_match.group(1).strip()
-            else:
-                description = full_desc[:50].strip()
-            
-            # Clean description
-            description = re.sub(r'\s+', ' ', description)
-            description = description.replace('Paid to', '').replace('Received from', '').strip()
-            description = description.split('UPI')[0].split('Transaction')[0].strip()
-            
-            # Skip if description is too short or empty
-            if len(description) < 2:
-                continue
-            
-            # Parse amount - handle all decimal formats
+            # --- 2. PARSE DATE ---
+            # Remove commas and clean up
+            date_clean = re.sub(r'[^\d\w]', ' ', date_str).strip()
+            # Standardize spacing (e.g., "01 Oct  2025" -> "01 Oct 2025")
+            date_clean = re.sub(r'\s+', ' ', date_clean)
+            try:
+                date = datetime.strptime(date_clean, '%d %b %Y')
+            except ValueError:
+                # Fallback for "01 Oct, 2025" format
+                date = datetime.strptime(date_clean, '%d %b %Y')
+
+            # --- 3. PARSE AMOUNT ---
             amount_clean = amount_str.replace(',', '').strip()
             amount = float(amount_clean)
-            
-            # Skip invalid amounts
             if amount <= 0:
                 continue
+
+            # --- 4. CLEAN DESCRIPTION ---
+            # Description often contains newlines or "UPI..." text if regex grabbed too much
+            description = description_raw.strip()
+            # Remove "UPI Transaction ID" if it accidentally got into description
+            description = description.split('UPI Transaction')[0].strip()
+            # Remove extra spaces
+            description = re.sub(r'\s+', ' ', description)
             
-            # Skip rewards but NOT other valid Google Pay transactions
-            skip_keywords = ['google pay rewards', 'googlepayrewards']
+            # Skip if description is too short/empty
+            if len(description) < 2:
+                continue
+                
+            # Filter out Rewards
+            skip_keywords = ['google pay rewards', 'googlepayrewards', 'better luck next time']
             if any(keyword in description.lower().replace(' ', '') for keyword in skip_keywords):
                 continue
+
+            # --- 5. DETERMINE TYPE ---
+            is_received = 'received' in type_str.lower()
+            transaction_type = 'Received' if is_received else 'Sent'
+            
+            # --- 6. CLEAN BANK ---
+            bank = bank_raw.strip() if bank_raw else "Unknown"
             
             transactions.append({
                 'Date': date,
                 'Description': description,
                 'Amount': amount,
-                'Type': transaction_type
+                'Type': transaction_type,
+                'Transaction ID': trans_id,  # Useful for deduplication
+                'Bank': bank
             })
             
         except Exception as e:
+            # print(f"Error parsing row: {e}") # Debugging
             continue
     
     # Create DataFrame
     df = pd.DataFrame(transactions)
     
-    # Remove duplicates
+    # Remove duplicates based on Transaction ID (Very accurate)
     if not df.empty:
-        df = df.drop_duplicates(subset=['Date', 'Description', 'Amount'], keep='first')
+        if 'Transaction ID' in df.columns:
+            df = df.drop_duplicates(subset=['Transaction ID'], keep='first')
+        else:
+            df = df.drop_duplicates(subset=['Date', 'Description', 'Amount'], keep='first')
+            
         df = df.sort_values('Date')
     
     return df
@@ -191,13 +207,17 @@ def process_pdf_data(pdf_files, logic_sheet_df):
     # Combine all PDFs
     combined_df = pd.concat(all_transactions, ignore_index=True)
     
+    # Check for Transaction ID column availability for robust deduplication across files
+    if 'Transaction ID' in combined_df.columns:
+        combined_df = combined_df.drop_duplicates(subset=['Transaction ID'], keep='first')
+    
     # Categorize each transaction
     combined_df['Category'] = 'Misc'
     combined_df['Sub Category'] = 'Yet to Name'
     
     # Pass the loaded logic sheet to the categorizer
     for idx, row in combined_df.iterrows():
-        # Skip received transactions
+        # Skip received transactions (Income)
         if row['Type'] == 'Received':
             combined_df.at[idx, 'Category'] = 'Income'
             combined_df.at[idx, 'Sub Category'] = 'Received'
