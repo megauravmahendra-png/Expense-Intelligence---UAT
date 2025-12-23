@@ -8,3 +8,5 @@ PyPDF2
 fuzzywuzzy
 python-Levenshtein
 pdfplumber
+beautifulsoup4
+requests
