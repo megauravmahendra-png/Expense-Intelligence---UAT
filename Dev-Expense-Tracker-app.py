@@ -977,46 +977,80 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     # =========================================================
-    # WEEKDAY VS WEEKEND - WITH FIXED FILTERS
+    # WEEKDAY VS WEEKEND - FIXED WITH FRAGMENT
     # =========================================================
     st.markdown("### 📅 Weekday vs Weekend Behaviour")
     st.caption("*Weekend includes Friday after 7:00 PM, Saturday, and Sunday")
     
-    # Initialize session state for filters if not exists
-    if 'selected_metric' not in st.session_state:
-        st.session_state['selected_metric'] = "Total Spend"
+    # Initialize filter states if not present
+    if 'filter_categories' not in st.session_state:
+        st.session_state['filter_categories'] = {}
+    if 'filter_subcategories' not in st.session_state:
+        st.session_state['filter_subcategories'] = {}
     
     f1, f2, f3 = st.columns([1.2, 1.2, 1])
     
-    # Get all categories
     all_categories = sorted(month_df["Category"].unique().tolist())
     
     with f1:
         with st.popover("🏷️ Filter Category"):
-            # Use multiselect instead of individual checkboxes
-            selected_categories = st.multiselect(
-                "Select Categories",
-                options=all_categories,
-                default=all_categories,
-                key="category_filter_multiselect"
-            )
+            st.markdown("**Select Categories**")
+            # Select/Deselect All
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Select All", key="select_all_cat", use_container_width=True):
+                    for cat in all_categories:
+                        st.session_state['filter_categories'][cat] = True
+            with col_b:
+                if st.button("Clear All", key="clear_all_cat", use_container_width=True):
+                    for cat in all_categories:
+                        st.session_state['filter_categories'][cat] = False
+            
+            st.markdown("---")
+            for cat in all_categories:
+                # Initialize if not exists
+                if cat not in st.session_state['filter_categories']:
+                    st.session_state['filter_categories'][cat] = True
+                
+                st.session_state['filter_categories'][cat] = st.checkbox(
+                    cat, 
+                    value=st.session_state['filter_categories'].get(cat, True),
+                    key=f"cat_cb_{cat}"
+                )
+    
+    selected_categories = [cat for cat in all_categories if st.session_state['filter_categories'].get(cat, True)]
     
     if not selected_categories:
         selected_categories = all_categories
     
     filtered = month_df[month_df["Category"].isin(selected_categories)]
-    
-    # Get subcategories based on filtered categories
     all_subcategories = sorted(filtered["Sub Category"].unique().tolist())
     
     with f2:
         with st.popover("📂 Filter Sub Category"):
-            selected_subcategories = st.multiselect(
-                "Select Sub Categories",
-                options=all_subcategories,
-                default=all_subcategories,
-                key="subcategory_filter_multiselect"
-            )
+            st.markdown("**Select Sub Categories**")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Select All", key="select_all_sub", use_container_width=True):
+                    for sub in all_subcategories:
+                        st.session_state['filter_subcategories'][sub] = True
+            with col_b:
+                if st.button("Clear All", key="clear_all_sub", use_container_width=True):
+                    for sub in all_subcategories:
+                        st.session_state['filter_subcategories'][sub] = False
+            
+            st.markdown("---")
+            for sub in all_subcategories:
+                if sub not in st.session_state['filter_subcategories']:
+                    st.session_state['filter_subcategories'][sub] = True
+                
+                st.session_state['filter_subcategories'][sub] = st.checkbox(
+                    sub, 
+                    value=st.session_state['filter_subcategories'].get(sub, True),
+                    key=f"sub_cb_{sub}"
+                )
+    
+    selected_subcategories = [sub for sub in all_subcategories if st.session_state['filter_subcategories'].get(sub, True)]
     
     if not selected_subcategories:
         selected_subcategories = all_subcategories
@@ -1024,14 +1058,12 @@ with tab2:
     filtered = filtered[filtered["Sub Category"].isin(selected_subcategories)]
     
     with f3:
-        # Use session state to maintain selection
+        metric_options = ["Total Spend", "Average Spend (per calendar day)"]
         metric = st.selectbox(
             "Metric",
-            ["Total Spend", "Average Spend (per calendar day)"],
-            key="metric_selector",
-            index=0 if st.session_state.get('selected_metric', "Total Spend") == "Total Spend" else 1
+            metric_options,
+            key="metric_select_box"
         )
-        st.session_state['selected_metric'] = metric
     
     if not filtered.empty:
         if metric == "Total Spend":
@@ -1134,7 +1166,7 @@ with tab6:
     if st.session_state.get('debug_log'):
         log_container = st.container()
         with log_container:
-            for log in st.session_state['debug_log'][-50:]:  # Show last 50 logs
+            for log in st.session_state['debug_log'][-50:]:
                 log_class = f"log-{log['level']}"
                 st.markdown(f"""<div class="{log_class}"><strong>[{log['time']}]</strong> {log['message']}</div>""", unsafe_allow_html=True)
     else:
