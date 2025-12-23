@@ -8,6 +8,7 @@ import gdown
 from pathlib import Path
 import shutil
 import requests
+
 # =========================================================
 # CONFIG
 # =========================================================
@@ -17,6 +18,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
 # =========================================================
 # AUTHENTICATION
 # =========================================================
@@ -133,10 +135,12 @@ def login_page():
                     if not user_match.empty:
                         # Get the Google Drive link for this user
                         drive_link = user_match.iloc[0].get('Google Drive Data Link', '')
+                        sheet_link = user_match.iloc[0].get('Google Sheet Link', '')
                         
                         st.session_state['authenticated'] = True
                         st.session_state['username'] = username
                         st.session_state['user_drive_link'] = str(drive_link).strip() if pd.notna(drive_link) else ''
+                        st.session_state['user_sheet_link'] = str(sheet_link).strip() if pd.notna(sheet_link) else ''
                         st.rerun()
                     else:
                         st.error("❌ Incorrect username or password")
@@ -149,6 +153,7 @@ def login_page():
 # Check authentication
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
+
 if not st.session_state['authenticated']:
     login_page()
     st.stop()
@@ -159,54 +164,15 @@ if not st.session_state['authenticated']:
 st.markdown("""
 <style>
 body { background:#0b1220; color:#e5e7eb; }
-.section-box {
-    background:#0f172a;
-    border:1px solid #1e293b;
-    border-radius:18px;
-    padding:22px;
-    margin-bottom:24px;
-}
-.card {
-    background:#111827;
-    border:1px solid #1f2937;
-    border-radius:16px;
-    padding:18px;
-    transition:0.25s;
-}
-.card:hover {
-    transform:translateY(-4px);
-    box-shadow:0 10px 24px rgba(0,0,0,0.35);
-}
-.kpi-title {
-    font-size:0.7rem;
-    letter-spacing:0.08em;
-    color:#9ca3af;
-    text-transform:uppercase;
-}
-.kpi-value {
-    font-size:1.8rem;
-    font-weight:700;
-}
-.subtle {
-    color:#9ca3af;
-    font-size:0.85rem;
-}
-.insight-box {
-    background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-    border-radius: 16px;
-    padding: 20px;
-    margin: 10px 0;
-    color: white;
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-}
-.insight-icon {
-    font-size: 1.5rem;
-    margin-right: 10px;
-}
-.insight-text {
-    font-size: 1rem;
-    line-height: 1.6;
-}
+.section-box { background:#0f172a; border:1px solid #1e293b; border-radius:18px; padding:22px; margin-bottom:24px; }
+.card { background:#111827; border:1px solid #1f2937; border-radius:16px; padding:18px; transition:0.25s; }
+.card:hover { transform:translateY(-4px); box-shadow:0 10px 24px rgba(0,0,0,0.35); }
+.kpi-title { font-size:0.7rem; letter-spacing:0.08em; color:#9ca3af; text-transform:uppercase; }
+.kpi-value { font-size:1.8rem; font-weight:700; }
+.subtle { color:#9ca3af; font-size:0.85rem; }
+.insight-box { background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); border-radius: 16px; padding: 20px; margin: 10px 0; color: white; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }
+.insight-icon { font-size: 1.5rem; margin-right: 10px; }
+.insight-text { font-size: 1rem; line-height: 1.6; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -218,7 +184,7 @@ with col1:
     st.markdown("## 💳 Expense Intelligence - UAT")
     st.markdown("<div class='subtle'>Designed for awareness, not anxiety</div>", unsafe_allow_html=True)
 with col2:
-    st.markdown(f"**👤 {st.session_state['username']}**")
+    st.markdown(f"👤 {st.session_state['username']}")
     if st.button("🚪 Logout"):
         st.session_state['authenticated'] = False
         st.rerun()
@@ -265,7 +231,22 @@ def download_from_gdrive_folder(folder_id):
         excel_files = list(temp_dir.glob("*.xlsx"))
         return [str(f) for f in excel_files if not f.name.startswith("~$")]
     except Exception as e:
-        return None  # Return None on error to distinguish from empty folder
+        return None
+
+def load_google_sheet(sheet_link):
+    """Load data from a Google Sheet URL"""
+    try:
+        # Extract sheet ID from various URL formats
+        if '/spreadsheets/d/' in sheet_link:
+            sheet_id = sheet_link.split('/spreadsheets/d/')[1].split('/')[0].split('?')[0]
+        else:
+            sheet_id = sheet_link  # Assume it's just the ID
+        
+        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+        df = pd.read_csv(csv_url)
+        return df
+    except Exception as e:
+        return None
 
 def extract_folder_id_from_link(link):
     """Extract folder ID from various Google Drive link formats"""
@@ -288,7 +269,37 @@ def extract_folder_id_from_link(link):
     
     return None
 
-def generate_insights(current_month_df, previous_month_df, amt_col):
+def determine_weekend(row, date_col, time_col):
+    """
+    Determine if a transaction is during weekend.
+    Weekend = Friday after 7:00 PM + Saturday + Sunday
+    """
+    day_of_week = row[date_col].weekday()  # 0=Monday, 4=Friday, 5=Saturday, 6=Sunday
+    
+    # Saturday or Sunday
+    if day_of_week >= 5:
+        return "Weekend"
+    
+    # Friday after 7:00 PM
+    if day_of_week == 4:  # Friday
+        if pd.notna(row.get("Hour")):
+            if row["Hour"] >= 19:  # 7:00 PM or later
+                return "Weekend"
+    
+    return "Weekday"
+
+def get_time_period(hour):
+    """Categorize hour into time periods"""
+    if 5 <= hour < 12:
+        return "Morning (5AM-12PM)"
+    elif 12 <= hour < 17:
+        return "Afternoon (12PM-5PM)"
+    elif 17 <= hour < 21:
+        return "Evening (5PM-9PM)"
+    else:
+        return "Night (9PM-5AM)"
+
+def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
     """Generate intelligent insights comparing current and previous month"""
     insights = []
     
@@ -316,15 +327,22 @@ def generate_insights(current_month_df, previous_month_df, amt_col):
                 insights.append(f"⚠️ {cat} spending jumped by {cat_change:.1f}% (₹{current_cat[cat]:,.0f} vs ₹{prev_cat[cat]:,.0f})")
     
     # Weekend vs Weekday
-    weekend_avg = current_month_df[current_month_df["WeekType"] == "Weekend"].groupby(current_month_df[detect(current_month_df, ["date"])])[amt_col].sum().mean()
-    weekday_avg = current_month_df[current_month_df["WeekType"] == "Weekday"].groupby(current_month_df[detect(current_month_df, ["date"])])[amt_col].sum().mean()
+    weekend_avg = current_month_df[current_month_df["WeekType"] == "Weekend"].groupby(current_month_df[date_col])[amt_col].sum().mean()
+    weekday_avg = current_month_df[current_month_df["WeekType"] == "Weekday"].groupby(current_month_df[date_col])[amt_col].sum().mean()
     
-    if weekend_avg > weekday_avg * 1.3:
-        insights.append(f"🎉 You spend {((weekend_avg/weekday_avg - 1) * 100):.0f}% more on weekends (₹{weekend_avg:,.0f} vs ₹{weekday_avg:,.0f} per day)")
+    if pd.notna(weekend_avg) and pd.notna(weekday_avg) and weekday_avg > 0:
+        if weekend_avg > weekday_avg * 1.3:
+            insights.append(f"🎉 You spend {((weekend_avg/weekday_avg - 1) * 100):.0f}% more on weekends (₹{weekend_avg:,.0f} vs ₹{weekday_avg:,.0f} per day)")
     
     # Top expense
-    top_expense = current_month_df.nlargest(1, amt_col).iloc[0]
-    insights.append(f"🔝 Your largest expense was ₹{top_expense[amt_col]:,.0f} on {top_expense['Description']}")
+    if not current_month_df.empty:
+        top_expense = current_month_df.nlargest(1, amt_col).iloc[0]
+        insights.append(f"🔝 Your largest expense was ₹{top_expense[amt_col]:,.0f} on {top_expense['Description']}")
+    
+    # Peak spending hour
+    if "Hour" in current_month_df.columns:
+        peak_hour = current_month_df.groupby("Hour")[amt_col].sum().idxmax()
+        insights.append(f"⏰ Your peak spending hour is {peak_hour}:00 - {peak_hour+1}:00")
     
     return insights
 
@@ -335,9 +353,10 @@ WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sun
 # =========================================================
 with st.sidebar:
     st.markdown("### 📂 Data Source")
-    mode = st.radio("", ["Google Drive (Auto-sync)", "Manual Upload"])
+    mode = st.radio("", ["Google Drive (Auto-sync)", "Google Sheet (Auto-sync)", "Manual Upload"])
 
 dfs = []
+
 if mode == "Manual Upload":
     uploads = st.sidebar.file_uploader(
         "Upload Excel files",
@@ -346,6 +365,40 @@ if mode == "Manual Upload":
     )
     if uploads:
         dfs = [pd.read_excel(f) for f in uploads]
+
+elif mode == "Google Sheet (Auto-sync)":
+    # Get user's sheet link from session
+    user_sheet_link = st.session_state.get('user_sheet_link', '')
+    
+    if not user_sheet_link:
+        st.sidebar.error("📄 Google Sheet link is missing.")
+        st.info("📄 Google Sheet link is missing. Please switch to Manual Upload mode or add sheet link to your credentials.")
+        st.stop()
+    
+    st.sidebar.info(f"📄 Syncing from Google Sheet")
+    
+    if st.sidebar.button("🔄 Sync Now") or 'gsheet_loaded' not in st.session_state:
+        with st.spinner("Loading data from Google Sheet..."):
+            sheet_df = load_google_sheet(user_sheet_link)
+            
+            if sheet_df is None:
+                st.sidebar.error("❌ Could not access Google Sheet")
+                st.error("⚠️ Kindly make the Google Sheet visible for all (Anyone with the link can view)\n\n📞 Contact Mahendra: 7627068716 for help")
+                st.stop()
+            
+            if sheet_df.empty:
+                st.sidebar.warning("📄 No data found in Google Sheet")
+                st.warning("📄 No data found. Please add data to your Google Sheet.")
+                st.stop()
+            
+            dfs = [sheet_df]
+            st.session_state['gsheet_loaded'] = True
+            st.session_state['gsheet_dfs'] = dfs
+            st.sidebar.success(f"✅ Loaded {len(sheet_df)} records")
+    
+    if 'gsheet_dfs' in st.session_state:
+        dfs = st.session_state['gsheet_dfs']
+
 else:  # Google Drive Auto-sync
     # Get user's drive link from session
     user_drive_link = st.session_state.get('user_drive_link', '')
@@ -401,7 +454,7 @@ else:  # Google Drive Auto-sync
         dfs = st.session_state['gdrive_dfs']
 
 if not dfs:
-    st.info("📁 Click 'Sync Now' to load data from Google Drive, or switch to Manual Upload")
+    st.info("📁 Click 'Sync Now' to load data, or switch to Manual Upload")
     st.stop()
 
 df = pd.concat(dfs, ignore_index=True)
@@ -410,19 +463,43 @@ df = pd.concat(dfs, ignore_index=True)
 # DATA PREP
 # =========================================================
 date_col = detect(df, ["date"])
+time_col = detect(df, ["time"])
 amt_col = detect(df, ["amount"])
 cat_col = detect(df, ["category"])
-sub_col = detect(df, ["sub"])
-desc_col = detect(df, ["merchant","description","name"])
+sub_col = detect(df, ["sub-category", "sub category", "subcategory"])
+desc_col = detect(df, ["merchant", "person", "description", "name"])
+type_col = detect(df, ["paid", "received", "type"])
 
 df[date_col] = pd.to_datetime(df[date_col])
 df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce").fillna(0)
-df["Category"] = df.get(cat_col, "Uncategorized")
-df["Sub Category"] = df.get(sub_col, "Uncategorized")
-df["Description"] = df.get(desc_col, "Unknown")
+
+# Handle Time column
+if time_col:
+    # Parse time and extract hour
+    try:
+        df["Time_Parsed"] = pd.to_datetime(df[time_col], format='%H:%M:%S', errors='coerce')
+        if df["Time_Parsed"].isna().all():
+            df["Time_Parsed"] = pd.to_datetime(df[time_col], format='%H:%M', errors='coerce')
+        if df["Time_Parsed"].isna().all():
+            df["Time_Parsed"] = pd.to_datetime(df[time_col], errors='coerce')
+        df["Hour"] = df["Time_Parsed"].dt.hour
+    except:
+        df["Hour"] = 12  # Default to noon if parsing fails
+else:
+    df["Hour"] = 12  # Default hour if no time column
+
+df["Category"] = df[cat_col] if cat_col else "Uncategorized"
+df["Sub Category"] = df[sub_col] if sub_col else "Uncategorized"
+df["Description"] = df[desc_col] if desc_col else "Unknown"
+df["Transaction Type"] = df[type_col] if type_col else "Paid"
 df["Month"] = df[date_col].dt.to_period("M").astype(str)
 df["Weekday"] = df[date_col].dt.day_name()
-df["WeekType"] = np.where(df[date_col].dt.weekday >= 5, "Weekend", "Weekday")
+
+# Determine Weekend (Friday after 7PM + Saturday + Sunday)
+df["WeekType"] = df.apply(lambda row: determine_weekend(row, date_col, time_col), axis=1)
+
+# Add Time Period
+df["TimePeriod"] = df["Hour"].apply(get_time_period)
 
 # =========================================================
 # FILTERS
@@ -486,7 +563,7 @@ with tab2:
         (k1,"Total Spend",month_df[amt_col].sum()),
         (k2,"Excl. Bills",non_bill_df[amt_col].sum()),
         (k3,"Daily Avg",non_bill_df.groupby(date_col)[amt_col].sum().mean()),
-        (k4,"Top Category",non_bill_df.groupby("Category")[amt_col].sum().idxmax())
+        (k4,"Top Category",non_bill_df.groupby("Category")[amt_col].sum().idxmax() if not non_bill_df.empty else "N/A")
     ]
     for col,title,val in kpis:
         display = f"₹{val:,.0f}" if isinstance(val,(int,float,np.number)) else str(val)
@@ -527,7 +604,7 @@ with tab2:
         st.markdown("#### 🧩 Expense Composition")
         
         # 1. Prepare data: Create specific labels for Parent Categories
-        chart_df = month_df.copy() # Work on a copy to avoid warnings
+        chart_df = month_df.copy()
         total_monthly = chart_df[amt_col].sum()
         
         # Calculate spend per category to derive the % for the parent label
@@ -540,13 +617,11 @@ with tab2:
         # 2. Build the Treemap using the NEW "Category Label" as the parent
         fig = px.treemap(
             chart_df,
-            path=["Category Label", "Sub Category"], # Use the custom label here
+            path=["Category Label", "Sub Category"],
             values=amt_col,
             template="plotly_dark"
         )
         
-        # 3. Formatting: This applies to the boxes (Sub Categories)
-        # Shows: Name, Amount (₹), and Percentage of Total
         fig.update_traces(
             textinfo="label+value+percent root",
             texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
@@ -577,8 +652,46 @@ with tab2:
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
+    # =========================================================
+    # HOUR-WISE ANALYSIS (NEW)
+    # =========================================================
+    st.markdown("#### ⏰ Time-based Analysis")
+    h1, h2 = st.columns(2)
+    
+    with h1:
+        # Average spend per hour
+        hourly_avg = month_df.groupby("Hour")[amt_col].mean().reset_index()
+        hourly_avg["Hour_Label"] = hourly_avg["Hour"].apply(lambda x: f"{x:02d}:00")
+        fig = px.bar(
+            hourly_avg,
+            x="Hour_Label", y=amt_col,
+            template="plotly_dark", 
+            title="Average Spend per Hour",
+            labels={"Hour_Label": "Hour", amt_col: "Avg Amount (₹)"}
+        )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+    
+    with h2:
+        # Time Period Analysis (Morning, Afternoon, Evening, Night)
+        period_order = ["Morning (5AM-12PM)", "Afternoon (12PM-5PM)", "Evening (5PM-9PM)", "Night (9PM-5AM)"]
+        period_spend = month_df.groupby("TimePeriod")[amt_col].sum().reindex(period_order).reset_index()
+        fig = px.bar(
+            period_spend,
+            x="TimePeriod", y=amt_col,
+            template="plotly_dark",
+            title="Spending by Time of Day",
+            labels={"TimePeriod": "Time Period", amt_col: "Total Amount (₹)"},
+            color="TimePeriod",
+            color_discrete_sequence=["#FFD700", "#FF8C00", "#FF4500", "#4169E1"]
+        )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+    
     # Weekday vs Weekend Behaviour 
     st.markdown("### 📅 Weekday vs Weekend Behaviour")
+    st.caption("*Weekend includes Friday after 7:00 PM, Saturday, and Sunday")
+    
     f1,f2,f3 = st.columns([1.2,1.2,1])
     
     with f1:
@@ -633,7 +746,7 @@ with tab2:
 with tab3:
     st.markdown("### 💡 Smart Insights")
     
-    insights = generate_insights(month_df, previous_month_df, amt_col)
+    insights = generate_insights(month_df, previous_month_df, amt_col, date_col)
     
     for insight in insights:
         st.markdown(f"""
