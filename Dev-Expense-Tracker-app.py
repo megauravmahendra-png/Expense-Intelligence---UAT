@@ -9,7 +9,6 @@ from pathlib import Path
 import shutil
 import re
 import requests
-from bs4 import BeautifulSoup
 
 # =========================================================
 # CONFIG
@@ -280,48 +279,28 @@ def extract_sheet_id_from_link(link):
     return None
 
 def get_google_sheets_from_folder(folder_id):
-    """
-    Scrape the Google Drive folder page to find Google Sheets links.
-    This works for publicly shared folders.
-    """
+    """Scan folder for Google Sheets"""
     add_debug_log(f"Scanning folder for Google Sheets: {folder_id}")
     
     folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
     
     try:
-        # Request the folder page
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(folder_url, headers=headers, timeout=15)
         add_debug_log(f"Folder page status: {response.status_code}")
         
         if response.status_code != 200:
-            add_debug_log(f"Could not access folder page", "error")
             return []
         
-        # Look for spreadsheet IDs in the page content
         content = response.text
-        
-        # Pattern to find Google Sheets IDs
-        # Google Sheets links contain /spreadsheets/d/ID or the ID appears in data attributes
         sheet_ids = []
         
-        # Method 1: Look for spreadsheet URLs
         spreadsheet_pattern = r'/spreadsheets/d/([a-zA-Z0-9_-]+)'
         matches = re.findall(spreadsheet_pattern, content)
         sheet_ids.extend(matches)
         
-        # Method 2: Look for file IDs that might be sheets (from data attributes)
-        # Pattern for Google Drive file IDs
-        file_id_pattern = r'data-id="([a-zA-Z0-9_-]{25,})"'
-        file_matches = re.findall(file_id_pattern, content)
-        
-        add_debug_log(f"Found {len(matches)} spreadsheet patterns, {len(file_matches)} file IDs")
-        
-        # Deduplicate
         unique_sheet_ids = list(set(sheet_ids))
-        add_debug_log(f"Unique sheet IDs found: {unique_sheet_ids}", "success" if unique_sheet_ids else "warning")
+        add_debug_log(f"Found {len(unique_sheet_ids)} sheet(s)", "success" if unique_sheet_ids else "warning")
         
         return unique_sheet_ids
         
@@ -338,11 +317,8 @@ def load_google_sheet_by_id(sheet_id, sheet_name=None):
         if sheet_name:
             url += f"&sheet={sheet_name}"
         
-        add_debug_log(f"Export URL: {url}")
-        
         df = pd.read_csv(url)
         add_debug_log(f"Loaded {len(df)} rows, {len(df.columns)} columns", "success")
-        add_debug_log(f"Columns: {list(df.columns)}")
         
         return df
     except Exception as e:
@@ -351,25 +327,17 @@ def load_google_sheet_by_id(sheet_id, sheet_name=None):
 
 def try_load_as_google_sheet(file_id):
     """Try to load a Google Drive file ID as a Google Sheet"""
-    add_debug_log(f"Trying to load file ID as sheet: {file_id}")
-    
     try:
         url = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=csv"
-        
-        # First check if it's accessible
         response = requests.head(url, allow_redirects=True, timeout=10)
         
         if response.status_code == 200:
             df = pd.read_csv(url)
             if not df.empty:
-                add_debug_log(f"Successfully loaded as sheet: {len(df)} rows", "success")
+                add_debug_log(f"Loaded sheet {file_id[:8]}...: {len(df)} rows", "success")
                 return df
-        else:
-            add_debug_log(f"Not a Google Sheet or not accessible (status: {response.status_code})", "warning")
-            return None
-            
-    except Exception as e:
-        add_debug_log(f"Not a valid Google Sheet: {e}", "warning")
+        return None
+    except:
         return None
 
 def get_files_from_drive_folder(folder_id):
@@ -384,19 +352,14 @@ def get_files_from_drive_folder(folder_id):
             shutil.rmtree(temp_dir)
         temp_dir.mkdir(exist_ok=True)
         
-        add_debug_log("Starting gdown folder download...")
         gdown.download_folder(folder_url, output=str(temp_dir), quiet=True, use_cookies=False, remaining_ok=True)
         
         files_info = []
-        
-        # List all files
         all_files = list(temp_dir.iterdir())
         add_debug_log(f"Files downloaded: {[f.name for f in all_files]}")
         
         excel_files = list(temp_dir.glob("*.xlsx")) + list(temp_dir.glob("*.xls"))
         csv_files = list(temp_dir.glob("*.csv"))
-        
-        add_debug_log(f"Found {len(excel_files)} Excel, {len(csv_files)} CSV files")
         
         for f in excel_files:
             if not f.name.startswith("~$"):
@@ -408,27 +371,20 @@ def get_files_from_drive_folder(folder_id):
         
         return files_info
     except Exception as e:
-        add_debug_log(f"Error downloading from folder: {e}", "error")
+        add_debug_log(f"Error downloading: {e}", "error")
         return []
 
 def load_data_from_drive(folder_id, manual_sheet_links=None):
-    """
-    Load data from Google Drive folder.
-    1. First tries to download Excel/CSV files
-    2. Then scans for Google Sheets in the folder
-    3. Also loads any manually provided sheet links
-    """
+    """Load data from Google Drive folder"""
     add_debug_log("=" * 50)
     add_debug_log("STARTING DATA LOAD")
-    add_debug_log(f"Folder ID: {folder_id}")
-    add_debug_log(f"Manual sheet links: {manual_sheet_links}")
     add_debug_log("=" * 50)
     
     dfs = []
     file_info = []
     
-    # ===== METHOD 1: Download regular files (Excel/CSV) =====
-    add_debug_log("--- METHOD 1: Downloading regular files ---")
+    # METHOD 1: Download regular files
+    add_debug_log("--- METHOD 1: Regular files ---")
     files = get_files_from_drive_folder(folder_id)
     
     for f in files:
@@ -441,20 +397,14 @@ def load_data_from_drive(folder_id, manual_sheet_links=None):
             if not temp_df.empty:
                 dfs.append(temp_df)
                 file_info.append({
-                    "name": f["name"], 
-                    "rows": len(temp_df), 
-                    "cols": len(temp_df.columns), 
-                    "type": f["type"],
-                    "source": "folder_download"
+                    "name": f["name"], "rows": len(temp_df), "cols": len(temp_df.columns),
+                    "type": f["type"], "source": "folder_download"
                 })
-                add_debug_log(f"Loaded file: {f['name']} ({len(temp_df)} rows)", "success")
         except Exception as e:
             add_debug_log(f"Error loading {f['name']}: {e}", "error")
     
-    # ===== METHOD 2: Scan folder for Google Sheets =====
-    add_debug_log("--- METHOD 2: Scanning folder for Google Sheets ---")
-    
-    # Try to find Google Sheets by checking the folder page
+    # METHOD 2: Scan for Google Sheets
+    add_debug_log("--- METHOD 2: Scanning for Sheets ---")
     sheet_ids_from_folder = get_google_sheets_from_folder(folder_id)
     
     for sheet_id in sheet_ids_from_folder:
@@ -462,60 +412,37 @@ def load_data_from_drive(folder_id, manual_sheet_links=None):
         if temp_df is not None and not temp_df.empty:
             dfs.append(temp_df)
             file_info.append({
-                "name": f"Google Sheet (auto-detected)",
-                "rows": len(temp_df),
-                "cols": len(temp_df.columns),
-                "type": "gsheet",
-                "source": "folder_scan",
-                "sheet_id": sheet_id[:10] + "..."
+                "name": f"Google Sheet (auto)", "rows": len(temp_df), "cols": len(temp_df.columns),
+                "type": "gsheet", "source": "folder_scan", "sheet_id": sheet_id[:10] + "..."
             })
-            add_debug_log(f"Loaded Google Sheet from folder scan: {len(temp_df)} rows", "success")
     
-    # ===== METHOD 3: Try common Google Sheet approach =====
-    # Sometimes the folder ID itself might contain a sheet, or we can try the folder contents
-    add_debug_log("--- METHOD 3: Trying folder-based sheet detection ---")
-    
-    # Use the Drive API approach to list files (via the embed page)
+    # METHOD 3: Embed view scan
+    add_debug_log("--- METHOD 3: Embed view ---")
     try:
         embed_url = f"https://drive.google.com/embeddedfolderview?id={folder_id}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(embed_url, headers=headers, timeout=10)
+        response = requests.get(embed_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         
         if response.status_code == 200:
-            # Find file IDs in the response
             file_id_pattern = r'\["([a-zA-Z0-9_-]{20,50})"'
             potential_ids = re.findall(file_id_pattern, response.text)
             
-            add_debug_log(f"Found {len(potential_ids)} potential file IDs in embed view")
-            
-            # Try each ID as a Google Sheet (limit to first 10 to avoid too many requests)
             for file_id in potential_ids[:10]:
-                if file_id != folder_id:  # Don't try the folder ID itself
+                if file_id != folder_id:
                     temp_df = try_load_as_google_sheet(file_id)
                     if temp_df is not None:
-                        # Check if we already have this data
-                        is_duplicate = False
-                        for existing_info in file_info:
-                            if existing_info.get('sheet_id', '').startswith(file_id[:10]):
-                                is_duplicate = True
-                                break
-                        
+                        is_duplicate = any(f.get('sheet_id', '').startswith(file_id[:10]) for f in file_info)
                         if not is_duplicate:
                             dfs.append(temp_df)
                             file_info.append({
-                                "name": f"Google Sheet ({file_id[:8]}...)",
-                                "rows": len(temp_df),
-                                "cols": len(temp_df.columns),
-                                "type": "gsheet",
-                                "source": "embed_scan",
-                                "sheet_id": file_id[:10] + "..."
+                                "name": f"Google Sheet ({file_id[:8]}...)", "rows": len(temp_df),
+                                "cols": len(temp_df.columns), "type": "gsheet",
+                                "source": "embed_scan", "sheet_id": file_id[:10] + "..."
                             })
-                            add_debug_log(f"Found Google Sheet via embed: {file_id[:15]}...", "success")
     except Exception as e:
         add_debug_log(f"Embed scan failed: {e}", "warning")
     
-    # ===== METHOD 4: Manual sheet links =====
-    add_debug_log("--- METHOD 4: Loading manual sheet links ---")
+    # METHOD 4: Manual links
+    add_debug_log("--- METHOD 4: Manual links ---")
     if manual_sheet_links:
         for link in manual_sheet_links:
             sheet_id = extract_sheet_id_from_link(link)
@@ -524,20 +451,12 @@ def load_data_from_drive(folder_id, manual_sheet_links=None):
                 if temp_df is not None and not temp_df.empty:
                     dfs.append(temp_df)
                     file_info.append({
-                        "name": f"Google Sheet (manual)",
-                        "rows": len(temp_df),
-                        "cols": len(temp_df.columns),
-                        "type": "gsheet",
-                        "source": "manual_link",
-                        "sheet_id": sheet_id[:10] + "..."
+                        "name": f"Google Sheet (manual)", "rows": len(temp_df),
+                        "cols": len(temp_df.columns), "type": "gsheet",
+                        "source": "manual_link", "sheet_id": sheet_id[:10] + "..."
                     })
-                    add_debug_log(f"Loaded manual sheet: {len(temp_df)} rows", "success")
     
-    add_debug_log("=" * 50)
-    add_debug_log(f"TOTAL LOADED: {len(dfs)} dataframe(s)")
-    for i, info in enumerate(file_info):
-        add_debug_log(f"  {i+1}. {info['name']} - {info['rows']} rows ({info['source']})")
-    add_debug_log("=" * 50)
+    add_debug_log(f"TOTAL: {len(dfs)} dataframe(s) loaded", "success" if dfs else "error")
     
     return dfs, file_info
 
@@ -569,7 +488,7 @@ def parse_time_to_hour(time_val):
     return 12
 
 def determine_weekend(row, date_col):
-    """Determine if a transaction is during weekend (Fri after 7PM + Sat + Sun)"""
+    """Determine if a transaction is during weekend"""
     try:
         day_of_week = row[date_col].weekday()
         
@@ -601,7 +520,7 @@ def get_time_period(hour):
         return "Afternoon (12PM-5PM)"
 
 def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
-    """Generate intelligent insights comparing current and previous month"""
+    """Generate intelligent insights"""
     insights = []
     
     try:
@@ -611,11 +530,11 @@ def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
         if prev_total > 0:
             pct_change = ((current_total - prev_total) / prev_total) * 100
             if pct_change > 10:
-                insights.append(f"💸 Your spending increased by {pct_change:.1f}% compared to last month (₹{current_total:,.0f} vs ₹{prev_total:,.0f})")
+                insights.append(f"💸 Spending increased by {pct_change:.1f}% vs last month (₹{current_total:,.0f} vs ₹{prev_total:,.0f})")
             elif pct_change < -10:
-                insights.append(f"✅ Great job! You saved {abs(pct_change):.1f}% compared to last month (₹{current_total:,.0f} vs ₹{prev_total:,.0f})")
+                insights.append(f"✅ Great! You saved {abs(pct_change):.1f}% vs last month (₹{current_total:,.0f} vs ₹{prev_total:,.0f})")
             else:
-                insights.append(f"📊 Your spending is stable at ₹{current_total:,.0f}, similar to last month (₹{prev_total:,.0f})")
+                insights.append(f"📊 Spending stable at ₹{current_total:,.0f}, similar to last month")
         
         if "Category" in current_month_df.columns:
             current_cat = current_month_df.groupby("Category")[amt_col].sum()
@@ -625,7 +544,7 @@ def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
                 if cat in prev_cat.index and prev_cat[cat] > 0:
                     cat_change = ((current_cat[cat] - prev_cat[cat]) / prev_cat[cat]) * 100
                     if cat_change > 25:
-                        insights.append(f"⚠️ {cat} spending jumped by {cat_change:.1f}% (₹{current_cat[cat]:,.0f} vs ₹{prev_cat[cat]:,.0f})")
+                        insights.append(f"⚠️ {cat} jumped {cat_change:.1f}% (₹{current_cat[cat]:,.0f} vs ₹{prev_cat[cat]:,.0f})")
         
         if "WeekType" in current_month_df.columns:
             weekend_data = current_month_df[current_month_df["WeekType"] == "Weekend"]
@@ -637,25 +556,24 @@ def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
                 
                 if pd.notna(weekend_avg) and pd.notna(weekday_avg) and weekday_avg > 0:
                     if weekend_avg > weekday_avg * 1.3:
-                        insights.append(f"🎉 You spend {((weekend_avg/weekday_avg - 1) * 100):.0f}% more on weekends (₹{weekend_avg:,.0f} vs ₹{weekday_avg:,.0f} per day)")
+                        insights.append(f"🎉 You spend {((weekend_avg/weekday_avg - 1) * 100):.0f}% more on weekends")
         
         if not current_month_df.empty and "Description" in current_month_df.columns:
             top_expense = current_month_df.nlargest(1, amt_col).iloc[0]
-            insights.append(f"🔝 Your largest expense was ₹{top_expense[amt_col]:,.0f} on {top_expense['Description']}")
+            insights.append(f"🔝 Largest expense: ₹{top_expense[amt_col]:,.0f} on {top_expense['Description']}")
         
         if "Hour" in current_month_df.columns:
             hour_spend = current_month_df.groupby("Hour")[amt_col].sum()
             if not hour_spend.empty:
                 peak_hour = hour_spend.idxmax()
-                insights.append(f"⏰ Your peak spending hour is {int(peak_hour)}:00 - {int(peak_hour)+1}:00")
-    
-    except Exception as e:
-        insights.append(f"📊 Analysis in progress...")
+                insights.append(f"⏰ Peak spending hour: {int(peak_hour)}:00 - {int(peak_hour)+1}:00")
+    except:
+        pass
     
     return insights
 
 def get_data_quality_score(df, date_col, amt_col, cat_col, time_col):
-    """Calculate data quality score and issues"""
+    """Calculate data quality score"""
     issues = []
     score = 100
     
@@ -673,173 +591,142 @@ def get_data_quality_score(df, date_col, amt_col, cat_col, time_col):
         uncategorized = (df["Category"] == "Uncategorized").sum()
         if uncategorized > 0:
             pct = (uncategorized / len(df)) * 100
-            issues.append(f"📝 {uncategorized} transactions ({pct:.1f}%) are uncategorized")
+            issues.append(f"📝 {uncategorized} ({pct:.1f}%) uncategorized")
             score -= min(15, pct / 2)
     
     if not time_col:
-        issues.append(f"ℹ️ No time column detected - time analysis will use defaults")
+        issues.append(f"ℹ️ No time column - using defaults")
         score -= 5
-    
-    duplicates = df.duplicated().sum()
-    if duplicates > 0:
-        issues.append(f"🔄 {duplicates} potential duplicate rows found")
-        score -= min(10, duplicates)
-    
-    future_dates = (df[date_col] > pd.Timestamp.now()).sum()
-    if future_dates > 0:
-        issues.append(f"🔮 {future_dates} transactions have future dates")
-        score -= min(10, future_dates * 2)
-    
-    negative_amounts = (df[amt_col] < 0).sum()
-    if negative_amounts > 0:
-        issues.append(f"➖ {negative_amounts} transactions have negative amounts")
-        score -= min(10, negative_amounts)
     
     return max(0, score), issues
 
 WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 
 # =========================================================
-# DATA SOURCE
+# SIDEBAR - CLEAN UI
 # =========================================================
 with st.sidebar:
+    # Data Source Selection
     st.markdown("### 📂 Data Source")
-    mode = st.radio("", ["Google Drive (Auto-sync)", "Manual Upload"])
+    mode = st.radio("", ["Google Drive (Auto-sync)", "Manual Upload"], key="data_source_mode", label_visibility="collapsed")
 
+# Initialize variables
 dfs = []
 file_info = []
+manual_sheet_links = []
 
+# Handle data loading based on mode
 if mode == "Manual Upload":
-    uploads = st.sidebar.file_uploader(
-        "Upload Excel/CSV files",
-        type=["xlsx", "xls", "csv"],
-        accept_multiple_files=True
-    )
-    if uploads:
-        for f in uploads:
-            try:
-                if f.name.endswith('.csv'):
-                    temp_df = pd.read_csv(f)
-                else:
-                    temp_df = pd.read_excel(f)
-                dfs.append(temp_df)
-                file_info.append({"name": f.name, "rows": len(temp_df), "cols": len(temp_df.columns), "type": "upload"})
-            except Exception as e:
-                st.warning(f"Could not read {f.name}: {e}")
-
+    with st.sidebar:
+        uploads = st.file_uploader(
+            "Upload Excel/CSV files",
+            type=["xlsx", "xls", "csv"],
+            accept_multiple_files=True,
+            key="file_uploader"
+        )
+        if uploads:
+            for f in uploads:
+                try:
+                    if f.name.endswith('.csv'):
+                        temp_df = pd.read_csv(f)
+                    else:
+                        temp_df = pd.read_excel(f)
+                    dfs.append(temp_df)
+                    file_info.append({"name": f.name, "rows": len(temp_df), "cols": len(temp_df.columns), "type": "upload"})
+                except Exception as e:
+                    st.warning(f"Could not read {f.name}: {e}")
 else:
+    # Google Drive mode
     user_drive_link = st.session_state.get('user_drive_link', '')
-    
-    # Debug info in sidebar
-    with st.sidebar.expander("🔍 Debug Info", expanded=False):
-        st.markdown("**Backend Link:**")
-        st.code(user_drive_link if user_drive_link else "No link", language=None)
-        
-        folder_id = extract_folder_id_from_link(user_drive_link)
-        sheet_id = extract_sheet_id_from_link(user_drive_link)
-        st.markdown(f"**Folder ID:** `{folder_id or 'None'}`")
-        st.markdown(f"**Sheet ID:** `{sheet_id or 'None'}`")
-    
-    if not user_drive_link:
-        st.sidebar.error("📁 Drive link is missing.")
-        st.info("📁 Drive link is missing. Please switch to Manual Upload mode.")
-        st.stop()
-    
     folder_id = extract_folder_id_from_link(user_drive_link)
     sheet_id = extract_sheet_id_from_link(user_drive_link)
     
-    if sheet_id:
-        # Direct Google Sheet link
-        st.sidebar.info(f"📄 Direct Google Sheet detected")
+    with st.sidebar:
+        # Sync button - prominent
+        if st.button("🔄 Sync Data", use_container_width=True, key="sync_button"):
+            st.session_state['force_sync'] = True
+            if 'gdrive_loaded' in st.session_state:
+                del st.session_state['gdrive_loaded']
         
-        if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
-            clear_debug_log()
-            add_debug_log("Loading direct Google Sheet")
+        # Advanced options in expander
+        with st.expander("⚙️ Advanced Options", expanded=False):
+            st.markdown("**📄 Manual Sheet Links**")
+            st.caption("If auto-detection fails, paste Google Sheet URL(s)")
+            sheet_links_input = st.text_area(
+                "Sheet URLs", 
+                height=80, 
+                key="sheet_links_input",
+                placeholder="https://docs.google.com/spreadsheets/d/...",
+                label_visibility="collapsed"
+            )
+            manual_sheet_links = [link.strip() for link in sheet_links_input.split('\n') if link.strip() and '/spreadsheets/' in link]
             
+            st.markdown("---")
+            st.markdown("**🔍 Debug Info**")
+            st.code(user_drive_link[:50] + "..." if len(user_drive_link) > 50 else user_drive_link or "No link", language=None)
+            st.markdown(f"Folder ID: `{folder_id or 'None'}`")
+            st.markdown(f"Sheet ID: `{sheet_id or 'None'}`")
+    
+    # Load data
+    if not user_drive_link:
+        st.sidebar.error("📁 Drive link missing")
+        st.info("📁 No Drive link found. Please switch to Manual Upload.")
+        st.stop()
+    
+    if sheet_id:
+        # Direct sheet link
+        if 'gdrive_loaded' not in st.session_state:
+            clear_debug_log()
             with st.spinner("Loading Google Sheet..."):
                 temp_df = load_google_sheet_by_id(sheet_id)
-                
                 if temp_df is not None and not temp_df.empty:
                     dfs = [temp_df]
                     file_info = [{"name": "Google Sheet", "rows": len(temp_df), "cols": len(temp_df.columns), "type": "gsheet"}]
                     st.session_state['gdrive_loaded'] = True
                     st.session_state['gdrive_dfs'] = dfs
                     st.session_state['file_info'] = file_info
-                    st.sidebar.success(f"✅ Loaded {len(temp_df)} rows")
                 else:
-                    st.sidebar.error("❌ Could not load Google Sheet")
-                    st.error("⚠️ Could not access Google Sheet. Make sure it's shared publicly.\n\n📞 Contact Mahendra: 7627068716")
+                    st.error("❌ Could not load Google Sheet. Make sure it's publicly shared.")
                     st.stop()
         
         if 'gdrive_dfs' in st.session_state:
             dfs = st.session_state['gdrive_dfs']
-        if 'file_info' in st.session_state:
-            file_info = st.session_state['file_info']
+            file_info = st.session_state.get('file_info', [])
     
     elif folder_id:
-        st.sidebar.info(f"📁 Drive folder detected")
-        
-        # Option to add manual sheet links (as backup)
-        with st.sidebar.expander("📄 Manual Sheet Links (Optional)"):
-            st.caption("If auto-detection fails, paste Google Sheet URL(s) here")
-            sheet_links_input = st.text_area("Sheet URLs", height=80, key="sheet_links", 
-                                              placeholder="https://docs.google.com/spreadsheets/d/...")
-            manual_sheet_links = [link.strip() for link in sheet_links_input.split('\n') if link.strip() and '/spreadsheets/' in link]
-        
-        if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
+        # Folder link
+        if 'gdrive_loaded' not in st.session_state:
             clear_debug_log()
-            add_debug_log(f"Starting sync for folder: {folder_id}")
-            
-            with st.spinner("🔍 Scanning Google Drive folder..."):
+            with st.spinner("🔍 Scanning Google Drive..."):
                 dfs, file_info = load_data_from_drive(folder_id, manual_sheet_links if manual_sheet_links else None)
                 
                 if dfs:
                     st.session_state['gdrive_loaded'] = True
                     st.session_state['gdrive_dfs'] = dfs
                     st.session_state['file_info'] = file_info
-                    
-                    total_rows = sum(f['rows'] for f in file_info)
-                    st.sidebar.success(f"✅ Loaded {len(dfs)} source(s), {total_rows:,} rows")
                 else:
-                    st.sidebar.error("❌ No data loaded")
-                    add_debug_log("FAILED - No data loaded", "error")
-                    
                     st.error("""
-                    📂 **Could not load data from folder**
+                    📂 **No data found**
                     
-                    **Possible reasons:**
-                    1. The Google Sheet in the folder is not publicly accessible
-                    2. The folder doesn't contain any data files
-                    
-                    **Solution:**
-                    1. Open your Google Sheet
-                    2. Click "Share" → "Anyone with the link" → "Viewer"
-                    3. Copy the Sheet URL
-                    4. Paste in "Manual Sheet Links" section
-                    5. Click "Sync Now" again
+                    **Try these steps:**
+                    1. Open your Google Sheet → Share → Anyone with link → Viewer
+                    2. Copy the Sheet URL
+                    3. Go to ⚙️ Advanced Options → Paste the URL
+                    4. Click 🔄 Sync Data
                     
                     📞 Contact Mahendra: 7627068716
                     """)
-                    
-                    # Show debug log for troubleshooting
-                    with st.expander("🔍 Debug Log (for troubleshooting)"):
-                        for log in st.session_state.get('debug_log', []):
-                            st.text(f"[{log['time']}] {log['level'].upper()}: {log['message']}")
-                    
                     st.stop()
         
         if 'gdrive_dfs' in st.session_state:
             dfs = st.session_state['gdrive_dfs']
-        if 'file_info' in st.session_state:
-            file_info = st.session_state['file_info']
-    
+            file_info = st.session_state.get('file_info', [])
     else:
-        st.sidebar.error("⚠️ Invalid link format")
-        st.error("Could not recognize the link format.\n\n📞 Contact Mahendra: 7627068716")
+        st.error("⚠️ Invalid link format")
         st.stop()
 
 if not dfs:
-    st.info("📁 Click 'Sync Now' to load data, or switch to Manual Upload")
+    st.info("📁 Click '🔄 Sync Data' to load, or switch to Manual Upload")
     st.stop()
 
 df = pd.concat(dfs, ignore_index=True)
@@ -901,13 +788,13 @@ df["TimePeriod"] = df["Hour"].apply(get_time_period)
 df = df.dropna(subset=[date_col])
 
 if df.empty:
-    st.error("❌ No valid data found after processing.")
+    st.error("❌ No valid data found.")
     st.stop()
 
 data_quality_score, data_issues = get_data_quality_score(df, date_col, amt_col, cat_col, time_col)
 
 # =========================================================
-# FILTERS
+# MONTH FILTER - IN SIDEBAR (AFTER DATA LOAD)
 # =========================================================
 months = sorted(df["Month"].unique())
 
@@ -915,12 +802,23 @@ if not months:
     st.error("❌ No valid months found.")
     st.stop()
 
-selected_month = st.sidebar.selectbox(
-    "Month",
-    months,
-    index=len(months)-1,
-    format_func=format_month
-)
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("### 📅 Select Month")
+    selected_month = st.selectbox(
+        "Month",
+        months,
+        index=len(months)-1,
+        format_func=format_month,
+        key="month_selector",
+        label_visibility="collapsed"
+    )
+    
+    # Show data summary
+    st.markdown("---")
+    st.markdown("### 📊 Data Summary")
+    total_rows = sum(f['rows'] for f in file_info) if file_info else len(df)
+    st.markdown(f"**{len(file_info)} source(s)** • **{total_rows:,} rows**")
 
 month_df = df[df["Month"] == selected_month]
 non_bill_df = month_df[month_df["Category"] != "Bill Payment"]
@@ -996,7 +894,7 @@ with tab2:
     
     with left:
         st.markdown("#### 📉 Budget Burn-down")
-        budget = st.number_input("Monthly Budget", value=30000, step=1000)
+        budget = st.number_input("Monthly Budget", value=30000, step=1000, key="budget_input")
         
         try:
             year = int(selected_month.split("-")[0])
@@ -1007,8 +905,7 @@ with tab2:
                 daily = (
                     non_bill_df.groupby(date_col)[amt_col]
                     .sum()
-                    .reindex(pd.date_range(month_df[date_col].min(),
-                                            month_df[date_col].max()), fill_value=0)
+                    .reindex(pd.date_range(month_df[date_col].min(), month_df[date_col].max()), fill_value=0)
                     .cumsum()
                     .reset_index()
                 )
@@ -1016,16 +913,11 @@ with tab2:
                 ideal = np.linspace(0, budget, days)
                 
                 fig = px.line(daily, x="Date", y="Actual", template="plotly_dark")
-                fig.add_scatter(
-                    x=pd.date_range(daily["Date"].min(), periods=days),
-                    y=ideal, name="Ideal"
-                )
+                fig.add_scatter(x=pd.date_range(daily["Date"].min(), periods=days), y=ideal, name="Ideal")
                 fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
                 st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-            else:
-                st.info("No data for burn-down chart")
-        except Exception as e:
-            st.warning(f"Could not create burn-down chart")
+        except:
+            st.info("No data for burn-down chart")
     
     with right:
         st.markdown("#### 🧩 Expense Composition")
@@ -1040,18 +932,8 @@ with tab2:
                     lambda x: f"{x} ({cat_sums.get(x, 0) / total_monthly:.1%})"
                 )
                 
-                fig = px.treemap(
-                    chart_df,
-                    path=["Category Label", "Sub Category"],
-                    values=amt_col,
-                    template="plotly_dark"
-                )
-                
-                fig.update_traces(
-                    textinfo="label+value+percent root",
-                    texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}"
-                )
-                
+                fig = px.treemap(chart_df, path=["Category Label", "Sub Category"], values=amt_col, template="plotly_dark")
+                fig.update_traces(textinfo="label+value+percent root", texttemplate="%{label}<br>₹%{value:,.0f}<br>%{percentRoot:.1%}")
                 fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
                 st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
@@ -1094,25 +976,47 @@ with tab2:
         fig.update_xaxes(tickangle=45)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
+    # =========================================================
+    # WEEKDAY VS WEEKEND - WITH FIXED FILTERS
+    # =========================================================
     st.markdown("### 📅 Weekday vs Weekend Behaviour")
     st.caption("*Weekend includes Friday after 7:00 PM, Saturday, and Sunday")
     
+    # Initialize session state for filters if not exists
+    if 'selected_metric' not in st.session_state:
+        st.session_state['selected_metric'] = "Total Spend"
+    
     f1, f2, f3 = st.columns([1.2, 1.2, 1])
     
+    # Get all categories
+    all_categories = sorted(month_df["Category"].unique().tolist())
+    
     with f1:
-        with st.popover("Filter Category"):
-            all_categories = sorted(month_df["Category"].unique())
-            selected_categories = [cat for cat in all_categories if st.checkbox(cat, value=True, key=f"cat_{cat}")]
+        with st.popover("🏷️ Filter Category"):
+            # Use multiselect instead of individual checkboxes
+            selected_categories = st.multiselect(
+                "Select Categories",
+                options=all_categories,
+                default=all_categories,
+                key="category_filter_multiselect"
+            )
     
     if not selected_categories:
         selected_categories = all_categories
     
     filtered = month_df[month_df["Category"].isin(selected_categories)]
     
+    # Get subcategories based on filtered categories
+    all_subcategories = sorted(filtered["Sub Category"].unique().tolist())
+    
     with f2:
-        with st.popover("Filter Sub Category"):
-            all_subcategories = sorted(filtered["Sub Category"].unique())
-            selected_subcategories = [sub for sub in all_subcategories if st.checkbox(sub, value=True, key=f"sub_{sub}")]
+        with st.popover("📂 Filter Sub Category"):
+            selected_subcategories = st.multiselect(
+                "Select Sub Categories",
+                options=all_subcategories,
+                default=all_subcategories,
+                key="subcategory_filter_multiselect"
+            )
     
     if not selected_subcategories:
         selected_subcategories = all_subcategories
@@ -1120,7 +1024,14 @@ with tab2:
     filtered = filtered[filtered["Sub Category"].isin(selected_subcategories)]
     
     with f3:
-        metric = st.selectbox("Metric", ["Total Spend", "Average Spend (per calendar day)"])
+        # Use session state to maintain selection
+        metric = st.selectbox(
+            "Metric",
+            ["Total Spend", "Average Spend (per calendar day)"],
+            key="metric_selector",
+            index=0 if st.session_state.get('selected_metric', "Total Spend") == "Total Spend" else 1
+        )
+        st.session_state['selected_metric'] = metric
     
     if not filtered.empty:
         if metric == "Total Spend":
@@ -1142,6 +1053,8 @@ with tab2:
             fig = px.bar(weektype_data, x="WeekType", y=amt_col, template="plotly_dark", title="Weekday vs Weekend")
             fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
             st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+    else:
+        st.info("No data for selected filters")
 
 # =========================================================
 # TAB 3 — INSIGHTS
@@ -1151,8 +1064,11 @@ with tab3:
     
     insights = generate_insights(month_df, previous_month_df, amt_col, date_col)
     
-    for insight in insights:
-        st.markdown(f"""<div class="insight-box"><div class="insight-text">{insight}</div></div>""", unsafe_allow_html=True)
+    if insights:
+        for insight in insights:
+            st.markdown(f"""<div class="insight-box"><div class="insight-text">{insight}</div></div>""", unsafe_allow_html=True)
+    else:
+        st.info("Not enough data for insights")
 
 # =========================================================
 # TAB 4 — INTELLIGENCE
@@ -1171,7 +1087,7 @@ with tab4:
         if not recurring.empty:
             st.dataframe(recurring, use_container_width=True)
         else:
-            st.info("No recurring uncategorized transactions found")
+            st.info("No recurring uncategorized transactions")
     else:
         st.info("No uncategorized transactions")
     
@@ -1193,8 +1109,13 @@ with tab5:
     df.sort_values(date_col).to_excel(buf, index=False)
     buf.seek(0)
     
-    st.download_button("📥 Download Clean Excel", data=buf, file_name="expense_intelligence_clean.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button(
+        "📥 Download Clean Excel",
+        data=buf,
+        file_name="expense_intelligence_clean.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="download_button"
+    )
 
 # =========================================================
 # TAB 6 — ADMIN
@@ -1204,16 +1125,20 @@ with tab6:
     
     # Debug Log
     st.markdown("#### 📜 Backend Debug Log")
-    if st.button("🗑️ Clear Log"):
-        clear_debug_log()
-        st.rerun()
+    col_btn1, col_btn2 = st.columns([1, 4])
+    with col_btn1:
+        if st.button("🗑️ Clear Log", key="clear_log_btn"):
+            clear_debug_log()
+            st.rerun()
     
     if st.session_state.get('debug_log'):
-        for log in st.session_state['debug_log']:
-            log_class = f"log-{log['level']}"
-            st.markdown(f"""<div class="{log_class}"><strong>[{log['time']}]</strong> {log['message']}</div>""", unsafe_allow_html=True)
+        log_container = st.container()
+        with log_container:
+            for log in st.session_state['debug_log'][-50:]:  # Show last 50 logs
+                log_class = f"log-{log['level']}"
+                st.markdown(f"""<div class="{log_class}"><strong>[{log['time']}]</strong> {log['message']}</div>""", unsafe_allow_html=True)
     else:
-        st.info("No logs yet. Click 'Sync Now' to generate logs.")
+        st.info("No logs yet. Click 'Sync Data' to generate logs.")
     
     st.markdown("---")
     
@@ -1235,9 +1160,15 @@ with tab6:
     
     # Column Detection
     st.markdown("#### 🔍 Column Detection")
-    for col_name, detected in detection_info.items():
-        status = "✅" if detected else "❌"
-        st.markdown(f"{status} **{col_name}:** `{detected or 'Not found'}`")
+    col1, col2 = st.columns(2)
+    with col1:
+        for col_name, detected in list(detection_info.items())[:4]:
+            status = "✅" if detected else "❌"
+            st.markdown(f"{status} **{col_name}:** `{detected or 'Not found'}`")
+    with col2:
+        for col_name, detected in list(detection_info.items())[4:]:
+            status = "✅" if detected else "❌"
+            st.markdown(f"{status} **{col_name}:** `{detected or 'Not found'}`")
     
     st.markdown("---")
     
@@ -1245,12 +1176,7 @@ with tab6:
     st.markdown("#### 📁 Loaded Sources")
     if file_info:
         for f in file_info:
-            st.markdown(f"""
-            <div class="debug-card">
-                <div class="debug-title">📄 {f['name']}</div>
-                <div class="debug-value">{f['rows']} rows × {f['cols']} cols | Type: {f.get('type')} | Source: {f.get('source', 'unknown')}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"📄 **{f['name']}** — {f['rows']} rows × {f['cols']} cols | `{f.get('type', 'unknown')}`")
     
     st.markdown("---")
     
@@ -1265,7 +1191,7 @@ with tab6:
     st.markdown("---")
     
     # Data Preview
-    st.markdown("#### 👀 Data Preview")
+    st.markdown("#### 👀 Data Preview (First 10 rows)")
     st.dataframe(df.head(10), use_container_width=True)
 
 st.markdown("---")
