@@ -20,6 +20,23 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Initialize debug log in session state
+if 'debug_log' not in st.session_state:
+    st.session_state['debug_log'] = []
+
+def add_debug_log(message, level="info"):
+    """Add a message to the debug log"""
+    timestamp = pd.Timestamp.now().strftime("%H:%M:%S")
+    st.session_state['debug_log'].append({
+        "time": timestamp,
+        "level": level,
+        "message": message
+    })
+
+def clear_debug_log():
+    """Clear the debug log"""
+    st.session_state['debug_log'] = []
+
 # =========================================================
 # AUTHENTICATION
 # =========================================================
@@ -168,10 +185,14 @@ body { background:#0b1220; color:#e5e7eb; }
 .insight-text { font-size: 1rem; line-height: 1.6; }
 .debug-card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin: 8px 0; }
 .debug-title { color: #60a5fa; font-weight: 600; font-size: 0.9rem; margin-bottom: 8px; }
-.debug-value { color: #e2e8f0; font-family: monospace; font-size: 0.85rem; }
+.debug-value { color: #e2e8f0; font-family: monospace; font-size: 0.85rem; word-wrap: break-word; }
 .stat-card { background: linear-gradient(135deg, #065f46 0%, #059669 100%); border-radius: 12px; padding: 16px; margin: 8px 0; color: white; }
 .warning-card { background: linear-gradient(135deg, #92400e 0%, #d97706 100%); border-radius: 12px; padding: 16px; margin: 8px 0; color: white; }
 .error-card { background: linear-gradient(135deg, #991b1b 0%, #dc2626 100%); border-radius: 12px; padding: 16px; margin: 8px 0; color: white; }
+.log-info { background: #1e3a5f; border-left: 4px solid #3b82f6; padding: 8px 12px; margin: 4px 0; font-family: monospace; font-size: 0.8rem; }
+.log-success { background: #1e3f2e; border-left: 4px solid #10b981; padding: 8px 12px; margin: 4px 0; font-family: monospace; font-size: 0.8rem; }
+.log-warning { background: #3f2e1e; border-left: 4px solid #f59e0b; padding: 8px 12px; margin: 4px 0; font-family: monospace; font-size: 0.8rem; }
+.log-error { background: #3f1e1e; border-left: 4px solid #ef4444; padding: 8px 12px; margin: 4px 0; font-family: monospace; font-size: 0.8rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -222,7 +243,10 @@ def get_chart_config():
 
 def extract_folder_id_from_link(link):
     """Extract folder ID from various Google Drive link formats"""
+    add_debug_log(f"Attempting to extract folder ID from: {link[:50]}..." if len(str(link)) > 50 else f"Attempting to extract folder ID from: {link}")
+    
     if not link or pd.isna(link):
+        add_debug_log("Link is empty or NaN", "warning")
         return None
     
     link = str(link).strip()
@@ -230,18 +254,25 @@ def extract_folder_id_from_link(link):
     if '/folders/' in link:
         try:
             folder_id = link.split('/folders/')[1].split('?')[0].split('/')[0].strip()
+            add_debug_log(f"Extracted folder ID: {folder_id}", "success")
             return folder_id
-        except:
+        except Exception as e:
+            add_debug_log(f"Failed to extract folder ID: {e}", "error")
             return None
     
     if len(link) > 20 and '/' not in link:
+        add_debug_log(f"Link appears to be a direct folder ID: {link}", "success")
         return link
     
+    add_debug_log("Could not extract folder ID from link", "warning")
     return None
 
 def extract_sheet_id_from_link(link):
     """Extract Google Sheet ID from URL"""
+    add_debug_log(f"Attempting to extract sheet ID from: {link[:50]}..." if len(str(link)) > 50 else f"Attempting to extract sheet ID from: {link}")
+    
     if not link:
+        add_debug_log("Link is empty", "warning")
         return None
     
     link = str(link).strip()
@@ -250,67 +281,114 @@ def extract_sheet_id_from_link(link):
     if '/spreadsheets/d/' in link:
         try:
             sheet_id = link.split('/spreadsheets/d/')[1].split('/')[0].split('?')[0]
+            add_debug_log(f"Extracted sheet ID: {sheet_id}", "success")
             return sheet_id
-        except:
+        except Exception as e:
+            add_debug_log(f"Failed to extract sheet ID: {e}", "error")
             return None
     
+    add_debug_log("Link does not contain '/spreadsheets/d/'", "warning")
     return None
 
 def load_google_sheet_by_id(sheet_id):
     """Load a Google Sheet by its ID"""
+    add_debug_log(f"Attempting to load Google Sheet with ID: {sheet_id}")
+    
     try:
         url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+        add_debug_log(f"Constructed URL: {url}")
+        
+        # First check if URL is accessible
+        response = requests.head(url, allow_redirects=True, timeout=10)
+        add_debug_log(f"HEAD request status: {response.status_code}")
+        
+        if response.status_code != 200:
+            add_debug_log(f"Sheet not accessible. Status: {response.status_code}", "error")
+            return None
+        
         df = pd.read_csv(url)
+        add_debug_log(f"Successfully loaded sheet: {len(df)} rows, {len(df.columns)} columns", "success")
+        add_debug_log(f"Columns found: {list(df.columns)}", "success")
+        
+        # Show first few rows in debug
+        if not df.empty:
+            add_debug_log(f"First row sample: {df.iloc[0].to_dict()}", "info")
+        
         return df
+    except requests.exceptions.RequestException as e:
+        add_debug_log(f"Network error loading sheet: {e}", "error")
+        return None
+    except pd.errors.EmptyDataError:
+        add_debug_log("Sheet is empty or has no data", "error")
+        return None
     except Exception as e:
+        add_debug_log(f"Error loading sheet: {type(e).__name__}: {e}", "error")
         return None
 
 def get_files_from_drive_folder(folder_id):
-    """Get list of files from a Google Drive folder using the folder page"""
+    """Get list of files from a Google Drive folder"""
+    add_debug_log(f"Attempting to get files from folder: {folder_id}")
+    
     try:
-        # Use gdown to list files
         folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+        add_debug_log(f"Folder URL: {folder_url}")
         
-        # Try to get folder contents via gdown
         temp_dir = Path("temp_data")
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
+            add_debug_log("Cleared existing temp directory")
         temp_dir.mkdir(exist_ok=True)
+        add_debug_log("Created temp directory")
         
-        # Download whatever gdown can get
+        add_debug_log("Starting gdown folder download...")
         gdown.download_folder(folder_url, output=str(temp_dir), quiet=True, use_cookies=False, remaining_ok=True)
+        add_debug_log("gdown download complete")
         
         files_info = []
         
-        # Get downloaded Excel/CSV files
+        # List all files in temp directory
+        all_files = list(temp_dir.iterdir())
+        add_debug_log(f"Files in temp directory: {[f.name for f in all_files]}")
+        
         excel_files = list(temp_dir.glob("*.xlsx")) + list(temp_dir.glob("*.xls"))
         csv_files = list(temp_dir.glob("*.csv"))
+        
+        add_debug_log(f"Found {len(excel_files)} Excel files, {len(csv_files)} CSV files")
         
         for f in excel_files:
             if not f.name.startswith("~$"):
                 files_info.append({"type": "excel", "path": str(f), "name": f.name})
+                add_debug_log(f"Added Excel file: {f.name}", "success")
         
         for f in csv_files:
             if not f.name.startswith("~$"):
                 files_info.append({"type": "csv", "path": str(f), "name": f.name})
+                add_debug_log(f"Added CSV file: {f.name}", "success")
         
         return files_info
     except Exception as e:
+        add_debug_log(f"Error getting files from folder: {type(e).__name__}: {e}", "error")
         return []
 
 def load_data_from_drive(folder_id, sheet_links=None):
-    """
-    Load data from Google Drive folder.
-    Supports: Excel files, CSV files, and Google Sheets (via direct links)
-    """
+    """Load data from Google Drive folder and/or sheet links"""
+    add_debug_log("=" * 50)
+    add_debug_log("Starting load_data_from_drive()")
+    add_debug_log(f"Folder ID: {folder_id}")
+    add_debug_log(f"Sheet links provided: {sheet_links}")
+    add_debug_log("=" * 50)
+    
     dfs = []
     file_info = []
     
     # Method 1: Try to download files from folder
+    add_debug_log("--- Method 1: Downloading files from folder ---")
     files = get_files_from_drive_folder(folder_id)
+    add_debug_log(f"Files found in folder: {len(files)}")
     
     for f in files:
         try:
+            add_debug_log(f"Processing file: {f['name']} (type: {f['type']})")
             if f["type"] == "csv":
                 temp_df = pd.read_csv(f["path"])
             else:
@@ -319,18 +397,43 @@ def load_data_from_drive(folder_id, sheet_links=None):
             if not temp_df.empty:
                 dfs.append(temp_df)
                 file_info.append({"name": f["name"], "rows": len(temp_df), "cols": len(temp_df.columns), "type": f["type"]})
+                add_debug_log(f"Loaded {f['name']}: {len(temp_df)} rows, {len(temp_df.columns)} cols", "success")
+            else:
+                add_debug_log(f"File {f['name']} is empty", "warning")
         except Exception as e:
-            pass
+            add_debug_log(f"Error loading {f['name']}: {e}", "error")
     
-    # Method 2: If sheet_links provided, load Google Sheets directly
+    # Method 2: Load Google Sheets from provided links
+    add_debug_log("--- Method 2: Loading Google Sheets from links ---")
     if sheet_links:
-        for link in sheet_links:
+        add_debug_log(f"Processing {len(sheet_links)} sheet link(s)")
+        for i, link in enumerate(sheet_links):
+            add_debug_log(f"Processing sheet link {i+1}: {link}")
             sheet_id = extract_sheet_id_from_link(link)
+            
             if sheet_id:
+                add_debug_log(f"Sheet ID extracted: {sheet_id}")
                 temp_df = load_google_sheet_by_id(sheet_id)
+                
                 if temp_df is not None and not temp_df.empty:
                     dfs.append(temp_df)
-                    file_info.append({"name": f"Google Sheet ({sheet_id[:8]}...)", "rows": len(temp_df), "cols": len(temp_df.columns), "type": "gsheet"})
+                    file_info.append({
+                        "name": f"Google Sheet ({sheet_id[:8]}...)", 
+                        "rows": len(temp_df), 
+                        "cols": len(temp_df.columns), 
+                        "type": "gsheet"
+                    })
+                    add_debug_log(f"Successfully added Google Sheet: {len(temp_df)} rows", "success")
+                else:
+                    add_debug_log(f"Failed to load Google Sheet from link {i+1}", "error")
+            else:
+                add_debug_log(f"Could not extract sheet ID from link {i+1}", "error")
+    else:
+        add_debug_log("No sheet links provided")
+    
+    add_debug_log("=" * 50)
+    add_debug_log(f"FINAL RESULT: {len(dfs)} dataframe(s) loaded")
+    add_debug_log("=" * 50)
     
     return dfs, file_info
 
@@ -523,6 +626,11 @@ if mode == "Manual Upload":
 else:
     user_drive_link = st.session_state.get('user_drive_link', '')
     
+    # Show what we're reading from backend
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**🔍 Backend Link:**")
+    st.sidebar.code(user_drive_link if user_drive_link else "No link found", language=None)
+    
     if not user_drive_link:
         st.sidebar.error("📁 Drive link is missing.")
         st.info("📁 Drive link is missing. Please switch to Manual Upload mode.")
@@ -532,11 +640,19 @@ else:
     folder_id = extract_folder_id_from_link(user_drive_link)
     sheet_id = extract_sheet_id_from_link(user_drive_link)
     
+    st.sidebar.markdown("**📋 Detected:**")
+    st.sidebar.markdown(f"- Folder ID: `{folder_id if folder_id else 'None'}`")
+    st.sidebar.markdown(f"- Sheet ID: `{sheet_id if sheet_id else 'None'}`")
+    
     if sheet_id:
         # Direct Google Sheet link
         st.sidebar.info(f"📄 Loading Google Sheet directly")
         
         if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
+            clear_debug_log()
+            add_debug_log("Starting sync - Direct Google Sheet mode")
+            add_debug_log(f"Sheet ID: {sheet_id}")
+            
             with st.spinner("Loading Google Sheet..."):
                 temp_df = load_google_sheet_by_id(sheet_id)
                 
@@ -547,9 +663,11 @@ else:
                     st.session_state['gdrive_dfs'] = dfs
                     st.session_state['file_info'] = file_info
                     st.sidebar.success(f"✅ Loaded {len(temp_df)} rows")
+                    add_debug_log(f"SUCCESS: Loaded {len(temp_df)} rows", "success")
                 else:
                     st.sidebar.error("❌ Could not load Google Sheet")
                     st.error("⚠️ Could not access Google Sheet. Make sure it's shared publicly (Anyone with the link can view)\n\n📞 Contact Mahendra: 7627068716 for help")
+                    add_debug_log("FAILED: Could not load Google Sheet", "error")
                     st.stop()
         
         if 'gdrive_dfs' in st.session_state:
@@ -558,16 +676,30 @@ else:
             file_info = st.session_state['file_info']
     
     elif folder_id:
-        # Folder link - try to get files + show option to add sheet links
         st.sidebar.info(f"📁 Syncing from Google Drive folder")
         
         # Option to add Google Sheet links manually
-        with st.sidebar.expander("📄 Add Google Sheet Links"):
-            st.caption("If your folder contains Google Sheets, paste their links here (one per line)")
-            sheet_links_input = st.text_area("Google Sheet URLs", height=100, key="sheet_links")
+        with st.sidebar.expander("📄 Add Google Sheet Links", expanded=True):
+            st.caption("Paste Google Sheet URL(s) here, one per line")
+            sheet_links_input = st.text_area("Google Sheet URLs", height=100, key="sheet_links", 
+                                              placeholder="https://docs.google.com/spreadsheets/d/...")
             sheet_links = [link.strip() for link in sheet_links_input.split('\n') if link.strip()]
+            
+            if sheet_links:
+                st.markdown("**Parsed Links:**")
+                for i, link in enumerate(sheet_links):
+                    extracted_id = extract_sheet_id_from_link(link)
+                    if extracted_id:
+                        st.markdown(f"✅ Link {i+1}: `{extracted_id[:20]}...`")
+                    else:
+                        st.markdown(f"❌ Link {i+1}: Invalid format")
         
         if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
+            clear_debug_log()
+            add_debug_log("Starting sync - Folder mode")
+            add_debug_log(f"Folder ID: {folder_id}")
+            add_debug_log(f"Sheet links from input: {sheet_links}")
+            
             with st.spinner("Loading data from Google Drive..."):
                 dfs, file_info = load_data_from_drive(folder_id, sheet_links if sheet_links else None)
                 
@@ -576,8 +708,10 @@ else:
                     st.session_state['gdrive_dfs'] = dfs
                     st.session_state['file_info'] = file_info
                     st.sidebar.success(f"✅ Loaded {len(dfs)} file(s)")
+                    add_debug_log(f"SUCCESS: Loaded {len(dfs)} file(s)", "success")
                 else:
                     st.sidebar.warning("📂 No files loaded")
+                    add_debug_log("FAILED: No files loaded", "error")
                     st.warning("""
                     📂 **No data files found!**
                     
@@ -599,6 +733,7 @@ else:
             file_info = st.session_state['file_info']
     
     else:
+        add_debug_log("Could not detect folder ID or sheet ID from link", "error")
         st.sidebar.error("⚠️ Invalid link format")
         st.error("⚠️ Could not recognize the link format. Please provide a valid Google Drive folder or Google Sheet link.\n\n📞 Contact Mahendra: 7627068716 for help")
         st.stop()
@@ -1022,6 +1157,26 @@ with tab6:
     st.markdown("### 🔧 Admin Panel")
     st.caption("System diagnostics and data quality information")
     
+    # Backend Debug Log Section
+    st.markdown("#### 📜 Backend Debug Log")
+    
+    if st.button("🗑️ Clear Debug Log"):
+        clear_debug_log()
+        st.rerun()
+    
+    if st.session_state.get('debug_log'):
+        for log in st.session_state['debug_log']:
+            log_class = f"log-{log['level']}"
+            st.markdown(f"""
+            <div class="{log_class}">
+                <strong>[{log['time']}]</strong> {log['message']}
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("No debug logs yet. Click 'Sync Now' to generate logs.")
+    
+    st.markdown("---")
+    
     # Data Quality Score
     st.markdown("#### 📊 Data Quality Score")
     
@@ -1190,11 +1345,10 @@ with tab6:
     
     drive_link = st.session_state.get('user_drive_link', '')
     if drive_link:
-        masked_link = drive_link[:40] + "..." if len(drive_link) > 40 else drive_link
         st.markdown(f"""
         <div class="debug-card">
-            <div class="debug-title">📁 Data Source Link</div>
-            <div class="debug-value">{masked_link}</div>
+            <div class="debug-title">📁 Data Source Link (Full)</div>
+            <div class="debug-value">{drive_link}</div>
         </div>
         """, unsafe_allow_html=True)
 
