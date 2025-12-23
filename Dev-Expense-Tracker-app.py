@@ -450,11 +450,25 @@ df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce").fillna(0)
 if time_col:
     # Parse time and extract hour
     try:
-        df["Time_Parsed"] = pd.to_datetime(df[time_col], format='%H:%M:%S', errors='coerce')
+        # Try 12-hour format with AM/PM (e.g., "8:51 PM", "12:30 PM")
+        df["Time_Parsed"] = pd.to_datetime(df[time_col], format='%I:%M %p', errors='coerce')
+        
         if df["Time_Parsed"].isna().all():
+            # Try 12-hour format with seconds (e.g., "8:51:30 PM")
+            df["Time_Parsed"] = pd.to_datetime(df[time_col], format='%I:%M:%S %p', errors='coerce')
+        
+        if df["Time_Parsed"].isna().all():
+            # Try 24-hour format with seconds (e.g., "20:51:30")
+            df["Time_Parsed"] = pd.to_datetime(df[time_col], format='%H:%M:%S', errors='coerce')
+        
+        if df["Time_Parsed"].isna().all():
+            # Try 24-hour format without seconds (e.g., "20:51")
             df["Time_Parsed"] = pd.to_datetime(df[time_col], format='%H:%M', errors='coerce')
+        
         if df["Time_Parsed"].isna().all():
+            # Generic parsing as fallback
             df["Time_Parsed"] = pd.to_datetime(df[time_col], errors='coerce')
+        
         df["Hour"] = df["Time_Parsed"].dt.hour
     except:
         df["Hour"] = 12  # Default to noon if parsing fails
