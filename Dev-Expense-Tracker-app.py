@@ -135,12 +135,10 @@ def login_page():
                     if not user_match.empty:
                         # Get the Google Drive link for this user
                         drive_link = user_match.iloc[0].get('Google Drive Data Link', '')
-                        sheet_link = user_match.iloc[0].get('Google Sheet Link', '')
                         
                         st.session_state['authenticated'] = True
                         st.session_state['username'] = username
                         st.session_state['user_drive_link'] = str(drive_link).strip() if pd.notna(drive_link) else ''
-                        st.session_state['user_sheet_link'] = str(sheet_link).strip() if pd.notna(sheet_link) else ''
                         st.rerun()
                     else:
                         st.error("❌ Incorrect username or password")
@@ -217,7 +215,7 @@ def get_chart_config():
     }
 
 def download_from_gdrive_folder(folder_id):
-    """Downloads all Excel files from a public Google Drive folder"""
+    """Downloads all data files from a public Google Drive folder (xlsx, csv, Google Sheets)"""
     temp_dir = Path("temp_data")
     
     if temp_dir.exists():
@@ -228,23 +226,24 @@ def download_from_gdrive_folder(folder_id):
     
     try:
         gdown.download_folder(folder_url, output=str(temp_dir), quiet=False, use_cookies=False, remaining_ok=True)
-        excel_files = list(temp_dir.glob("*.xlsx"))
-        return [str(f) for f in excel_files if not f.name.startswith("~$")]
-    except Exception as e:
-        return None
-
-def load_google_sheet(sheet_link):
-    """Load data from a Google Sheet URL"""
-    try:
-        # Extract sheet ID from various URL formats
-        if '/spreadsheets/d/' in sheet_link:
-            sheet_id = sheet_link.split('/spreadsheets/d/')[1].split('/')[0].split('?')[0]
-        else:
-            sheet_id = sheet_link  # Assume it's just the ID
         
-        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-        df = pd.read_csv(csv_url)
-        return df
+        # Get all supported file types: xlsx, xls, csv, and Google Sheets (downloaded as xlsx)
+        excel_files = list(temp_dir.glob("*.xlsx")) + list(temp_dir.glob("*.xls"))
+        csv_files = list(temp_dir.glob("*.csv"))
+        
+        all_files = []
+        
+        # Add Excel files
+        for f in excel_files:
+            if not f.name.startswith("~$"):
+                all_files.append(("excel", str(f)))
+        
+        # Add CSV files
+        for f in csv_files:
+            if not f.name.startswith("~$"):
+                all_files.append(("csv", str(f)))
+        
+        return all_files
     except Exception as e:
         return None
 
@@ -269,7 +268,7 @@ def extract_folder_id_from_link(link):
     
     return None
 
-def determine_weekend(row, date_col, time_col):
+def determine_weekend(row, date_col, hour_col="Hour"):
     """
     Determine if a transaction is during weekend.
     Weekend = Friday after 7:00 PM + Saturday + Sunday
@@ -282,8 +281,8 @@ def determine_weekend(row, date_col, time_col):
     
     # Friday after 7:00 PM
     if day_of_week == 4:  # Friday
-        if pd.notna(row.get("Hour")):
-            if row["Hour"] >= 19:  # 7:00 PM or later
+        if pd.notna(row.get(hour_col)):
+            if row[hour_col] >= 19:  # 7:00 PM or later
                 return "Weekend"
     
     return "Weekday"
@@ -353,51 +352,22 @@ WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sun
 # =========================================================
 with st.sidebar:
     st.markdown("### 📂 Data Source")
-    mode = st.radio("", ["Google Drive (Auto-sync)", "Google Sheet (Auto-sync)", "Manual Upload"])
+    mode = st.radio("", ["Google Drive (Auto-sync)", "Manual Upload"])
 
 dfs = []
 
 if mode == "Manual Upload":
     uploads = st.sidebar.file_uploader(
-        "Upload Excel files",
-        type=["xlsx"],
+        "Upload Excel/CSV files",
+        type=["xlsx", "xls", "csv"],
         accept_multiple_files=True
     )
     if uploads:
-        dfs = [pd.read_excel(f) for f in uploads]
-
-elif mode == "Google Sheet (Auto-sync)":
-    # Get user's sheet link from session
-    user_sheet_link = st.session_state.get('user_sheet_link', '')
-    
-    if not user_sheet_link:
-        st.sidebar.error("📄 Google Sheet link is missing.")
-        st.info("📄 Google Sheet link is missing. Please switch to Manual Upload mode or add sheet link to your credentials.")
-        st.stop()
-    
-    st.sidebar.info(f"📄 Syncing from Google Sheet")
-    
-    if st.sidebar.button("🔄 Sync Now") or 'gsheet_loaded' not in st.session_state:
-        with st.spinner("Loading data from Google Sheet..."):
-            sheet_df = load_google_sheet(user_sheet_link)
-            
-            if sheet_df is None:
-                st.sidebar.error("❌ Could not access Google Sheet")
-                st.error("⚠️ Kindly make the Google Sheet visible for all (Anyone with the link can view)\n\n📞 Contact Mahendra: 7627068716 for help")
-                st.stop()
-            
-            if sheet_df.empty:
-                st.sidebar.warning("📄 No data found in Google Sheet")
-                st.warning("📄 No data found. Please add data to your Google Sheet.")
-                st.stop()
-            
-            dfs = [sheet_df]
-            st.session_state['gsheet_loaded'] = True
-            st.session_state['gsheet_dfs'] = dfs
-            st.sidebar.success(f"✅ Loaded {len(sheet_df)} records")
-    
-    if 'gsheet_dfs' in st.session_state:
-        dfs = st.session_state['gsheet_dfs']
+        for f in uploads:
+            if f.name.endswith('.csv'):
+                dfs.append(pd.read_csv(f))
+            else:
+                dfs.append(pd.read_excel(f))
 
 else:  # Google Drive Auto-sync
     # Get user's drive link from session
@@ -430,14 +400,17 @@ else:  # Google Drive Auto-sync
                 st.stop()
             
             if not files:
-                st.sidebar.warning("📂 No Excel files found in folder")
-                st.warning("📂 No Excel files found. Please upload data to your Google Drive folder.")
+                st.sidebar.warning("📂 No data files found in folder")
+                st.warning("📂 No Excel/CSV/Google Sheet files found. Please upload data to your Google Drive folder.")
                 st.stop()
             
             # Load files successfully
-            for f in files:
+            for file_type, f in files:
                 try:
-                    dfs.append(pd.read_excel(f))
+                    if file_type == "csv":
+                        dfs.append(pd.read_csv(f))
+                    else:
+                        dfs.append(pd.read_excel(f))
                 except Exception as e:
                     st.warning(f"Skipped file: {Path(f).name}")
             
@@ -447,7 +420,7 @@ else:  # Google Drive Auto-sync
                 st.sidebar.success(f"✅ Loaded {len(dfs)} files")
             else:
                 st.sidebar.error("❌ Could not load any files")
-                st.error("❌ Could not load Excel files. Please check file format.")
+                st.error("❌ Could not load data files. Please check file format.")
                 st.stop()
     
     if 'gdrive_dfs' in st.session_state:
@@ -496,7 +469,7 @@ df["Month"] = df[date_col].dt.to_period("M").astype(str)
 df["Weekday"] = df[date_col].dt.day_name()
 
 # Determine Weekend (Friday after 7PM + Saturday + Sunday)
-df["WeekType"] = df.apply(lambda row: determine_weekend(row, date_col, time_col), axis=1)
+df["WeekType"] = df.apply(lambda row: determine_weekend(row, date_col, "Hour"), axis=1)
 
 # Add Time Period
 df["TimePeriod"] = df["Hour"].apply(get_time_period)
@@ -653,39 +626,44 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     # =========================================================
-    # HOUR-WISE ANALYSIS (NEW)
+    # TIME-BASED ANALYSIS
     # =========================================================
     st.markdown("#### ⏰ Time-based Analysis")
     h1, h2 = st.columns(2)
     
     with h1:
-        # Average spend per hour
-        hourly_avg = month_df.groupby("Hour")[amt_col].mean().reset_index()
-        hourly_avg["Hour_Label"] = hourly_avg["Hour"].apply(lambda x: f"{x:02d}:00")
-        fig = px.bar(
-            hourly_avg,
-            x="Hour_Label", y=amt_col,
-            template="plotly_dark", 
-            title="Average Spend per Hour",
-            labels={"Hour_Label": "Hour", amt_col: "Avg Amount (₹)"}
-        )
-        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
-        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
-    
-    with h2:
-        # Time Period Analysis (Morning, Afternoon, Evening, Night)
+        # Spending by Time of Day (Clubbed: Morning, Afternoon, Evening, Night)
         period_order = ["Morning (5AM-12PM)", "Afternoon (12PM-5PM)", "Evening (5PM-9PM)", "Night (9PM-5AM)"]
         period_spend = month_df.groupby("TimePeriod")[amt_col].sum().reindex(period_order).reset_index()
         fig = px.bar(
             period_spend,
             x="TimePeriod", y=amt_col,
             template="plotly_dark",
-            title="Spending by Time of Day",
+            title="Spending by Time of Day (Grouped)",
             labels={"TimePeriod": "Time Period", amt_col: "Total Amount (₹)"},
             color="TimePeriod",
             color_discrete_sequence=["#FFD700", "#FF8C00", "#FF4500", "#4169E1"]
         )
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
+    
+    with h2:
+        # Spending by Hour (Individual hours)
+        hourly_spend = month_df.groupby("Hour")[amt_col].sum().reset_index()
+        # Ensure all 24 hours are present
+        all_hours = pd.DataFrame({"Hour": range(24)})
+        hourly_spend = all_hours.merge(hourly_spend, on="Hour", how="left").fillna(0)
+        hourly_spend["Hour_Label"] = hourly_spend["Hour"].apply(lambda x: f"{x:02d}:00")
+        
+        fig = px.bar(
+            hourly_spend,
+            x="Hour_Label", y=amt_col,
+            template="plotly_dark",
+            title="Spending by Hour",
+            labels={"Hour_Label": "Hour", amt_col: "Total Amount (₹)"}
+        )
+        fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
+        fig.update_xaxes(tickangle=45)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     # Weekday vs Weekend Behaviour 
