@@ -36,7 +36,6 @@ def load_credentials():
 def login_page():
     """Beautiful login page"""
     
-    # Custom CSS for login page
     st.markdown("""
     <style>
     .login-container {
@@ -104,7 +103,6 @@ def login_page():
     </style>
     """, unsafe_allow_html=True)
     
-    # Login container
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
@@ -166,8 +164,13 @@ body { background:#0b1220; color:#e5e7eb; }
 .kpi-value { font-size:1.8rem; font-weight:700; }
 .subtle { color:#9ca3af; font-size:0.85rem; }
 .insight-box { background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); border-radius: 16px; padding: 20px; margin: 10px 0; color: white; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }
-.insight-icon { font-size: 1.5rem; margin-right: 10px; }
 .insight-text { font-size: 1rem; line-height: 1.6; }
+.debug-card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin: 8px 0; }
+.debug-title { color: #60a5fa; font-weight: 600; font-size: 0.9rem; margin-bottom: 8px; }
+.debug-value { color: #e2e8f0; font-family: monospace; font-size: 0.85rem; }
+.stat-card { background: linear-gradient(135deg, #065f46 0%, #059669 100%); border-radius: 12px; padding: 16px; margin: 8px 0; color: white; }
+.warning-card { background: linear-gradient(135deg, #92400e 0%, #d97706 100%); border-radius: 12px; padding: 16px; margin: 8px 0; color: white; }
+.error-card { background: linear-gradient(135deg, #991b1b 0%, #dc2626 100%); border-radius: 12px; padding: 16px; margin: 8px 0; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -229,7 +232,6 @@ def download_from_gdrive_folder(folder_id):
     try:
         gdown.download_folder(folder_url, output=str(temp_dir), quiet=False, use_cookies=False, remaining_ok=True)
         
-        # Get all supported file types
         excel_files = list(temp_dir.glob("*.xlsx")) + list(temp_dir.glob("*.xls"))
         csv_files = list(temp_dir.glob("*.csv"))
         
@@ -270,11 +272,10 @@ def extract_folder_id_from_link(link):
 def parse_time_to_hour(time_val):
     """Parse various time formats and return hour (0-23)"""
     if pd.isna(time_val):
-        return 12  # Default to noon
+        return 12
     
     time_str = str(time_val).strip().upper()
     
-    # Check for AM/PM format (e.g., "8:51 PM", "12:30 PM")
     am_pm_match = re.match(r'(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)', time_str)
     if am_pm_match:
         hour = int(am_pm_match.group(1))
@@ -287,27 +288,23 @@ def parse_time_to_hour(time_val):
         
         return hour
     
-    # Check for 24-hour format (e.g., "20:51", "20:51:30")
     time_24_match = re.match(r'(\d{1,2}):(\d{2})(?::\d{2})?', time_str)
     if time_24_match:
         hour = int(time_24_match.group(1))
         if 0 <= hour <= 23:
             return hour
     
-    return 12  # Default to noon if parsing fails
+    return 12
 
 def determine_weekend(row, date_col):
-    """
-    Determine if a transaction is during weekend.
-    Weekend = Friday after 7:00 PM + Saturday + Sunday
-    """
+    """Determine if a transaction is during weekend (Fri after 7PM + Sat + Sun)"""
     try:
         day_of_week = row[date_col].weekday()
         
-        if day_of_week >= 5:  # Saturday or Sunday
+        if day_of_week >= 5:
             return "Weekend"
         
-        if day_of_week == 4:  # Friday
+        if day_of_week == 4:
             hour = row.get("Hour", 12)
             if pd.notna(hour) and hour >= 19:
                 return "Weekend"
@@ -348,7 +345,6 @@ def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
             else:
                 insights.append(f"📊 Your spending is stable at ₹{current_total:,.0f}, similar to last month (₹{prev_total:,.0f})")
         
-        # Category analysis
         if "Category" in current_month_df.columns:
             current_cat = current_month_df.groupby("Category")[amt_col].sum()
             prev_cat = previous_month_df.groupby("Category")[amt_col].sum() if not previous_month_df.empty else pd.Series()
@@ -359,7 +355,6 @@ def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
                     if cat_change > 25:
                         insights.append(f"⚠️ {cat} spending jumped by {cat_change:.1f}% (₹{current_cat[cat]:,.0f} vs ₹{prev_cat[cat]:,.0f})")
         
-        # Weekend vs Weekday
         if "WeekType" in current_month_df.columns:
             weekend_data = current_month_df[current_month_df["WeekType"] == "Weekend"]
             weekday_data = current_month_df[current_month_df["WeekType"] == "Weekday"]
@@ -372,12 +367,10 @@ def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
                     if weekend_avg > weekday_avg * 1.3:
                         insights.append(f"🎉 You spend {((weekend_avg/weekday_avg - 1) * 100):.0f}% more on weekends (₹{weekend_avg:,.0f} vs ₹{weekday_avg:,.0f} per day)")
         
-        # Top expense
         if not current_month_df.empty and "Description" in current_month_df.columns:
             top_expense = current_month_df.nlargest(1, amt_col).iloc[0]
             insights.append(f"🔝 Your largest expense was ₹{top_expense[amt_col]:,.0f} on {top_expense['Description']}")
         
-        # Peak spending hour
         if "Hour" in current_month_df.columns:
             hour_spend = current_month_df.groupby("Hour")[amt_col].sum()
             if not hour_spend.empty:
@@ -389,6 +382,56 @@ def generate_insights(current_month_df, previous_month_df, amt_col, date_col):
     
     return insights
 
+def get_data_quality_score(df, date_col, amt_col, cat_col, time_col):
+    """Calculate data quality score and issues"""
+    issues = []
+    score = 100
+    
+    # Check for missing dates
+    missing_dates = df[date_col].isna().sum()
+    if missing_dates > 0:
+        issues.append(f"⚠️ {missing_dates} rows with missing dates")
+        score -= min(20, missing_dates * 2)
+    
+    # Check for missing amounts
+    missing_amounts = (df[amt_col] == 0).sum() + df[amt_col].isna().sum()
+    if missing_amounts > 0:
+        issues.append(f"⚠️ {missing_amounts} rows with zero/missing amounts")
+        score -= min(20, missing_amounts * 2)
+    
+    # Check for uncategorized
+    if "Category" in df.columns:
+        uncategorized = (df["Category"] == "Uncategorized").sum()
+        if uncategorized > 0:
+            pct = (uncategorized / len(df)) * 100
+            issues.append(f"📝 {uncategorized} transactions ({pct:.1f}%) are uncategorized")
+            score -= min(15, pct / 2)
+    
+    # Check for time data
+    if not time_col:
+        issues.append(f"ℹ️ No time column detected - time analysis will use defaults")
+        score -= 5
+    
+    # Check for duplicates
+    duplicates = df.duplicated().sum()
+    if duplicates > 0:
+        issues.append(f"🔄 {duplicates} potential duplicate rows found")
+        score -= min(10, duplicates)
+    
+    # Check for future dates
+    future_dates = (df[date_col] > pd.Timestamp.now()).sum()
+    if future_dates > 0:
+        issues.append(f"🔮 {future_dates} transactions have future dates")
+        score -= min(10, future_dates * 2)
+    
+    # Check for negative amounts
+    negative_amounts = (df[amt_col] < 0).sum()
+    if negative_amounts > 0:
+        issues.append(f"➖ {negative_amounts} transactions have negative amounts")
+        score -= min(10, negative_amounts)
+    
+    return max(0, score), issues
+
 WEEK_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 
 # =========================================================
@@ -399,6 +442,7 @@ with st.sidebar:
     mode = st.radio("", ["Google Drive (Auto-sync)", "Manual Upload"])
 
 dfs = []
+file_info = []  # Store file information for debug tab
 
 if mode == "Manual Upload":
     uploads = st.sidebar.file_uploader(
@@ -410,13 +454,15 @@ if mode == "Manual Upload":
         for f in uploads:
             try:
                 if f.name.endswith('.csv'):
-                    dfs.append(pd.read_csv(f))
+                    temp_df = pd.read_csv(f)
                 else:
-                    dfs.append(pd.read_excel(f))
+                    temp_df = pd.read_excel(f)
+                dfs.append(temp_df)
+                file_info.append({"name": f.name, "rows": len(temp_df), "cols": len(temp_df.columns)})
             except Exception as e:
                 st.warning(f"Could not read {f.name}: {e}")
 
-else:  # Google Drive Auto-sync
+else:
     user_drive_link = st.session_state.get('user_drive_link', '')
     
     if not user_drive_link:
@@ -447,18 +493,22 @@ else:  # Google Drive Auto-sync
                 st.warning("📂 No Excel/CSV files found. Please upload data to your Google Drive folder.")
                 st.stop()
             
+            temp_file_info = []
             for file_type, f in files:
                 try:
                     if file_type == "csv":
-                        dfs.append(pd.read_csv(f))
+                        temp_df = pd.read_csv(f)
                     else:
-                        dfs.append(pd.read_excel(f))
+                        temp_df = pd.read_excel(f)
+                    dfs.append(temp_df)
+                    temp_file_info.append({"name": Path(f).name, "rows": len(temp_df), "cols": len(temp_df.columns)})
                 except Exception as e:
                     st.warning(f"Skipped file: {Path(f).name} - {e}")
             
             if dfs:
                 st.session_state['gdrive_loaded'] = True
                 st.session_state['gdrive_dfs'] = dfs
+                st.session_state['file_info'] = temp_file_info
                 st.sidebar.success(f"✅ Loaded {len(dfs)} files")
             else:
                 st.sidebar.error("❌ Could not load any files")
@@ -467,6 +517,8 @@ else:  # Google Drive Auto-sync
     
     if 'gdrive_dfs' in st.session_state:
         dfs = st.session_state['gdrive_dfs']
+    if 'file_info' in st.session_state:
+        file_info = st.session_state['file_info']
 
 if not dfs:
     st.info("📁 Click 'Sync Now' to load data, or switch to Manual Upload")
@@ -477,7 +529,6 @@ df = pd.concat(dfs, ignore_index=True)
 # =========================================================
 # DATA PREP
 # =========================================================
-# Detect columns
 date_col = detect(df, ["date"])
 time_col = detect(df, ["time"])
 amt_col = detect(df, ["amount"])
@@ -486,15 +537,16 @@ sub_col = detect(df, ["sub-category", "sub category", "subcategory", "sub_catego
 desc_col = detect(df, ["merchant", "person", "description", "name"])
 type_col = detect(df, ["paid", "received", "type"])
 
-# Debug: Show detected columns
-with st.expander("🔍 Debug: Detected Columns"):
-    st.write(f"All columns: {list(df.columns)}")
-    st.write(f"Date: {date_col}")
-    st.write(f"Time: {time_col}")
-    st.write(f"Amount: {amt_col}")
-    st.write(f"Category: {cat_col}")
-    st.write(f"Sub-category: {sub_col}")
-    st.write(f"Description: {desc_col}")
+# Store detection info for debug tab
+detection_info = {
+    "Date Column": date_col,
+    "Time Column": time_col,
+    "Amount Column": amt_col,
+    "Category Column": cat_col,
+    "Sub-category Column": sub_col,
+    "Description Column": desc_col,
+    "Type Column": type_col
+}
 
 # Validate required columns
 if not date_col:
@@ -540,6 +592,9 @@ if df.empty:
     st.error("❌ No valid data found after processing. Please check your data format.")
     st.stop()
 
+# Calculate data quality score
+data_quality_score, data_issues = get_data_quality_score(df, date_col, amt_col, cat_col, time_col)
+
 # =========================================================
 # FILTERS
 # =========================================================
@@ -559,19 +614,19 @@ selected_month = st.sidebar.selectbox(
 month_df = df[df["Month"] == selected_month]
 non_bill_df = month_df[month_df["Category"] != "Bill Payment"]
 
-# Get previous month data
 current_month_idx = months.index(selected_month)
 previous_month_df = df[df["Month"] == months[current_month_idx - 1]] if current_month_idx > 0 else pd.DataFrame()
 
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📈 Trends",
     "📅 Monthly View",
     "💡 Insights",
     "🧠 Intelligence",
-    "📤 Export"
+    "📤 Export",
+    "🔧 Admin"
 ])
 
 # =========================================================
@@ -719,14 +774,11 @@ with tab2:
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
-    # =========================================================
-    # TIME-BASED ANALYSIS
-    # =========================================================
+    # Time-based Analysis
     st.markdown("#### ⏰ Time-based Analysis")
     h1, h2 = st.columns(2)
     
     with h1:
-        # Spending by Time of Day (Clubbed)
         period_order = ["Morning (5AM-12PM)", "Afternoon (12PM-5PM)", "Evening (5PM-9PM)", "Night (9PM-5AM)"]
         period_spend = month_df.groupby("TimePeriod")[amt_col].sum().reindex(period_order).fillna(0).reset_index()
         
@@ -743,7 +795,6 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
     with h2:
-        # Spending by Hour (Individual hours)
         hourly_spend = month_df.groupby("Hour")[amt_col].sum().reset_index()
         all_hours = pd.DataFrame({"Hour": range(24)})
         hourly_spend = all_hours.merge(hourly_spend, on="Hour", how="left").fillna(0)
@@ -760,7 +811,7 @@ with tab2:
         fig.update_xaxes(tickangle=45)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
-    # Weekday vs Weekend Behaviour 
+    # Weekday vs Weekend
     st.markdown("### 📅 Weekday vs Weekend Behaviour")
     st.caption("*Weekend includes Friday after 7:00 PM, Saturday, and Sunday")
     
@@ -892,10 +943,190 @@ with tab5:
         file_name="expense_intelligence_clean.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+# =========================================================
+# TAB 6 — ADMIN (DEBUG)
+# =========================================================
+with tab6:
+    st.markdown("### 🔧 Admin Panel")
+    st.caption("System diagnostics and data quality information")
     
-    # Show data preview
-    st.markdown("#### 📋 Data Preview")
-    st.dataframe(df.head(20), use_container_width=True)
+    # Data Quality Score
+    st.markdown("#### 📊 Data Quality Score")
+    
+    score_color = "#10b981" if data_quality_score >= 80 else "#f59e0b" if data_quality_score >= 60 else "#ef4444"
+    
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, {score_color}20 0%, {score_color}40 100%); 
+                border: 2px solid {score_color}; border-radius: 16px; padding: 24px; text-align: center; margin-bottom: 20px;">
+        <div style="font-size: 3rem; font-weight: 800; color: {score_color};">{data_quality_score}/100</div>
+        <div style="font-size: 1rem; color: #9ca3af;">Data Quality Score</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Data Issues
+    if data_issues:
+        st.markdown("#### ⚠️ Data Issues Found")
+        for issue in data_issues:
+            st.markdown(f"""
+            <div class="warning-card">
+                <div style="font-size: 0.95rem;">{issue}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div class="stat-card">
+            <div style="font-size: 0.95rem;">✅ No data issues found! Your data is clean.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Column Detection
+    st.markdown("#### 🔍 Column Detection")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Detected Columns:**")
+        for col_name, detected in detection_info.items():
+            status = "✅" if detected else "❌"
+            value = detected if detected else "Not found"
+            st.markdown(f"""
+            <div class="debug-card">
+                <div class="debug-title">{status} {col_name}</div>
+                <div class="debug-value">{value}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("**All Available Columns:**")
+        st.markdown(f"""
+        <div class="debug-card">
+            <div class="debug-title">📋 Columns in Data ({len(df.columns)})</div>
+            <div class="debug-value">{', '.join(df.columns.tolist())}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("**Sample Values (First Row):**")
+        if not df.empty:
+            first_row = df.iloc[0]
+            for col in df.columns[:6]:  # Show first 6 columns
+                st.markdown(f"""
+                <div class="debug-card">
+                    <div class="debug-title">{col}</div>
+                    <div class="debug-value">{first_row[col]}</div>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # File Information
+    st.markdown("#### 📁 Loaded Files")
+    if file_info:
+        for f in file_info:
+            st.markdown(f"""
+            <div class="debug-card">
+                <div class="debug-title">📄 {f['name']}</div>
+                <div class="debug-value">{f['rows']} rows × {f['cols']} columns</div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("File information not available")
+    
+    st.markdown("---")
+    
+    # Data Statistics
+    st.markdown("#### 📈 Data Statistics")
+    
+    stat1, stat2, stat3, stat4 = st.columns(4)
+    
+    with stat1:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="font-size: 1.8rem; font-weight: 700;">{len(df):,}</div>
+            <div style="font-size: 0.8rem; opacity: 0.9;">Total Transactions</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with stat2:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="font-size: 1.8rem; font-weight: 700;">{len(months)}</div>
+            <div style="font-size: 0.8rem; opacity: 0.9;">Months of Data</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with stat3:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="font-size: 1.8rem; font-weight: 700;">{df['Category'].nunique()}</div>
+            <div style="font-size: 0.8rem; opacity: 0.9;">Categories</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with stat4:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div style="font-size: 1.8rem; font-weight: 700;">₹{df[amt_col].sum():,.0f}</div>
+            <div style="font-size: 0.8rem; opacity: 0.9;">Total Spend (All Time)</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Date Range
+    st.markdown("#### 📅 Date Range")
+    min_date = df[date_col].min()
+    max_date = df[date_col].max()
+    date_range_days = (max_date - min_date).days
+    
+    st.markdown(f"""
+    <div class="debug-card">
+        <div class="debug-title">📅 Data Coverage</div>
+        <div class="debug-value">
+            From: {min_date.strftime('%d %b %Y')} → To: {max_date.strftime('%d %b %Y')} ({date_range_days} days)
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Category Breakdown
+    st.markdown("#### 🏷️ Category Distribution")
+    cat_dist = df.groupby("Category").agg({
+        amt_col: ['count', 'sum', 'mean']
+    }).round(2)
+    cat_dist.columns = ['Count', 'Total (₹)', 'Avg (₹)']
+    cat_dist = cat_dist.sort_values('Total (₹)', ascending=False)
+    st.dataframe(cat_dist, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Data Preview
+    st.markdown("#### 👀 Data Preview (First 10 rows)")
+    st.dataframe(df.head(10), use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Session Info
+    st.markdown("#### 🔐 Session Information")
+    st.markdown(f"""
+    <div class="debug-card">
+        <div class="debug-title">👤 Current User</div>
+        <div class="debug-value">{st.session_state.get('username', 'Unknown')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    drive_link = st.session_state.get('user_drive_link', '')
+    if drive_link:
+        # Mask the link for security
+        masked_link = drive_link[:30] + "..." if len(drive_link) > 30 else drive_link
+        st.markdown(f"""
+        <div class="debug-card">
+            <div class="debug-title">📁 Drive Link</div>
+            <div class="debug-value">{masked_link}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 st.markdown("---")
 st.markdown("<div class='subtle'>Built for thinking, not panic.</div>", unsafe_allow_html=True)
