@@ -8,6 +8,7 @@ import gdown
 from pathlib import Path
 import shutil
 import re
+import requests
 
 # =========================================================
 # CONFIG
@@ -219,37 +220,6 @@ def get_chart_config():
         'modeBarButtonsToRemove': ['zoom', 'pan', 'select', 'lasso', 'zoomIn', 'zoomOut', 'autoScale', 'resetScale']
     }
 
-def download_from_gdrive_folder(folder_id):
-    """Downloads all data files from a public Google Drive folder"""
-    temp_dir = Path("temp_data")
-    
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
-    
-    temp_dir.mkdir(exist_ok=True)
-    folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
-    
-    try:
-        gdown.download_folder(folder_url, output=str(temp_dir), quiet=False, use_cookies=False, remaining_ok=True)
-        
-        excel_files = list(temp_dir.glob("*.xlsx")) + list(temp_dir.glob("*.xls"))
-        csv_files = list(temp_dir.glob("*.csv"))
-        
-        all_files = []
-        
-        for f in excel_files:
-            if not f.name.startswith("~$"):
-                all_files.append(("excel", str(f)))
-        
-        for f in csv_files:
-            if not f.name.startswith("~$"):
-                all_files.append(("csv", str(f)))
-        
-        return all_files
-    except Exception as e:
-        st.error(f"Download error: {e}")
-        return None
-
 def extract_folder_id_from_link(link):
     """Extract folder ID from various Google Drive link formats"""
     if not link or pd.isna(link):
@@ -268,6 +238,101 @@ def extract_folder_id_from_link(link):
         return link
     
     return None
+
+def extract_sheet_id_from_link(link):
+    """Extract Google Sheet ID from URL"""
+    if not link:
+        return None
+    
+    link = str(link).strip()
+    
+    # Format: https://docs.google.com/spreadsheets/d/SHEET_ID/...
+    if '/spreadsheets/d/' in link:
+        try:
+            sheet_id = link.split('/spreadsheets/d/')[1].split('/')[0].split('?')[0]
+            return sheet_id
+        except:
+            return None
+    
+    return None
+
+def load_google_sheet_by_id(sheet_id):
+    """Load a Google Sheet by its ID"""
+    try:
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+        df = pd.read_csv(url)
+        return df
+    except Exception as e:
+        return None
+
+def get_files_from_drive_folder(folder_id):
+    """Get list of files from a Google Drive folder using the folder page"""
+    try:
+        # Use gdown to list files
+        folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+        
+        # Try to get folder contents via gdown
+        temp_dir = Path("temp_data")
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Download whatever gdown can get
+        gdown.download_folder(folder_url, output=str(temp_dir), quiet=True, use_cookies=False, remaining_ok=True)
+        
+        files_info = []
+        
+        # Get downloaded Excel/CSV files
+        excel_files = list(temp_dir.glob("*.xlsx")) + list(temp_dir.glob("*.xls"))
+        csv_files = list(temp_dir.glob("*.csv"))
+        
+        for f in excel_files:
+            if not f.name.startswith("~$"):
+                files_info.append({"type": "excel", "path": str(f), "name": f.name})
+        
+        for f in csv_files:
+            if not f.name.startswith("~$"):
+                files_info.append({"type": "csv", "path": str(f), "name": f.name})
+        
+        return files_info
+    except Exception as e:
+        return []
+
+def load_data_from_drive(folder_id, sheet_links=None):
+    """
+    Load data from Google Drive folder.
+    Supports: Excel files, CSV files, and Google Sheets (via direct links)
+    """
+    dfs = []
+    file_info = []
+    
+    # Method 1: Try to download files from folder
+    files = get_files_from_drive_folder(folder_id)
+    
+    for f in files:
+        try:
+            if f["type"] == "csv":
+                temp_df = pd.read_csv(f["path"])
+            else:
+                temp_df = pd.read_excel(f["path"])
+            
+            if not temp_df.empty:
+                dfs.append(temp_df)
+                file_info.append({"name": f["name"], "rows": len(temp_df), "cols": len(temp_df.columns), "type": f["type"]})
+        except Exception as e:
+            pass
+    
+    # Method 2: If sheet_links provided, load Google Sheets directly
+    if sheet_links:
+        for link in sheet_links:
+            sheet_id = extract_sheet_id_from_link(link)
+            if sheet_id:
+                temp_df = load_google_sheet_by_id(sheet_id)
+                if temp_df is not None and not temp_df.empty:
+                    dfs.append(temp_df)
+                    file_info.append({"name": f"Google Sheet ({sheet_id[:8]}...)", "rows": len(temp_df), "cols": len(temp_df.columns), "type": "gsheet"})
+    
+    return dfs, file_info
 
 def parse_time_to_hour(time_val):
     """Parse various time formats and return hour (0-23)"""
@@ -387,19 +452,16 @@ def get_data_quality_score(df, date_col, amt_col, cat_col, time_col):
     issues = []
     score = 100
     
-    # Check for missing dates
     missing_dates = df[date_col].isna().sum()
     if missing_dates > 0:
         issues.append(f"⚠️ {missing_dates} rows with missing dates")
         score -= min(20, missing_dates * 2)
     
-    # Check for missing amounts
     missing_amounts = (df[amt_col] == 0).sum() + df[amt_col].isna().sum()
     if missing_amounts > 0:
         issues.append(f"⚠️ {missing_amounts} rows with zero/missing amounts")
         score -= min(20, missing_amounts * 2)
     
-    # Check for uncategorized
     if "Category" in df.columns:
         uncategorized = (df["Category"] == "Uncategorized").sum()
         if uncategorized > 0:
@@ -407,24 +469,20 @@ def get_data_quality_score(df, date_col, amt_col, cat_col, time_col):
             issues.append(f"📝 {uncategorized} transactions ({pct:.1f}%) are uncategorized")
             score -= min(15, pct / 2)
     
-    # Check for time data
     if not time_col:
         issues.append(f"ℹ️ No time column detected - time analysis will use defaults")
         score -= 5
     
-    # Check for duplicates
     duplicates = df.duplicated().sum()
     if duplicates > 0:
         issues.append(f"🔄 {duplicates} potential duplicate rows found")
         score -= min(10, duplicates)
     
-    # Check for future dates
     future_dates = (df[date_col] > pd.Timestamp.now()).sum()
     if future_dates > 0:
         issues.append(f"🔮 {future_dates} transactions have future dates")
         score -= min(10, future_dates * 2)
     
-    # Check for negative amounts
     negative_amounts = (df[amt_col] < 0).sum()
     if negative_amounts > 0:
         issues.append(f"➖ {negative_amounts} transactions have negative amounts")
@@ -442,7 +500,7 @@ with st.sidebar:
     mode = st.radio("", ["Google Drive (Auto-sync)", "Manual Upload"])
 
 dfs = []
-file_info = []  # Store file information for debug tab
+file_info = []
 
 if mode == "Manual Upload":
     uploads = st.sidebar.file_uploader(
@@ -458,7 +516,7 @@ if mode == "Manual Upload":
                 else:
                     temp_df = pd.read_excel(f)
                 dfs.append(temp_df)
-                file_info.append({"name": f.name, "rows": len(temp_df), "cols": len(temp_df.columns)})
+                file_info.append({"name": f.name, "rows": len(temp_df), "cols": len(temp_df.columns), "type": "upload"})
             except Exception as e:
                 st.warning(f"Could not read {f.name}: {e}")
 
@@ -470,55 +528,80 @@ else:
         st.info("📁 Drive link is missing. Please switch to Manual Upload mode.")
         st.stop()
     
+    # Check if it's a folder link or a sheet link
     folder_id = extract_folder_id_from_link(user_drive_link)
+    sheet_id = extract_sheet_id_from_link(user_drive_link)
     
-    if not folder_id:
-        st.sidebar.error("⚠️ Invalid Google Drive link format")
-        st.error("⚠️ Kindly check the Google Drive link\n\n📞 Contact Mahendra: 7627068716 for help")
+    if sheet_id:
+        # Direct Google Sheet link
+        st.sidebar.info(f"📄 Loading Google Sheet directly")
+        
+        if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
+            with st.spinner("Loading Google Sheet..."):
+                temp_df = load_google_sheet_by_id(sheet_id)
+                
+                if temp_df is not None and not temp_df.empty:
+                    dfs = [temp_df]
+                    file_info = [{"name": "Google Sheet", "rows": len(temp_df), "cols": len(temp_df.columns), "type": "gsheet"}]
+                    st.session_state['gdrive_loaded'] = True
+                    st.session_state['gdrive_dfs'] = dfs
+                    st.session_state['file_info'] = file_info
+                    st.sidebar.success(f"✅ Loaded {len(temp_df)} rows")
+                else:
+                    st.sidebar.error("❌ Could not load Google Sheet")
+                    st.error("⚠️ Could not access Google Sheet. Make sure it's shared publicly (Anyone with the link can view)\n\n📞 Contact Mahendra: 7627068716 for help")
+                    st.stop()
+        
+        if 'gdrive_dfs' in st.session_state:
+            dfs = st.session_state['gdrive_dfs']
+        if 'file_info' in st.session_state:
+            file_info = st.session_state['file_info']
+    
+    elif folder_id:
+        # Folder link - try to get files + show option to add sheet links
+        st.sidebar.info(f"📁 Syncing from Google Drive folder")
+        
+        # Option to add Google Sheet links manually
+        with st.sidebar.expander("📄 Add Google Sheet Links"):
+            st.caption("If your folder contains Google Sheets, paste their links here (one per line)")
+            sheet_links_input = st.text_area("Google Sheet URLs", height=100, key="sheet_links")
+            sheet_links = [link.strip() for link in sheet_links_input.split('\n') if link.strip()]
+        
+        if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
+            with st.spinner("Loading data from Google Drive..."):
+                dfs, file_info = load_data_from_drive(folder_id, sheet_links if sheet_links else None)
+                
+                if dfs:
+                    st.session_state['gdrive_loaded'] = True
+                    st.session_state['gdrive_dfs'] = dfs
+                    st.session_state['file_info'] = file_info
+                    st.sidebar.success(f"✅ Loaded {len(dfs)} file(s)")
+                else:
+                    st.sidebar.warning("📂 No files loaded")
+                    st.warning("""
+                    📂 **No data files found!**
+                    
+                    **If you have Google Sheets in your folder:**
+                    1. Open the Google Sheet
+                    2. Copy its URL
+                    3. Paste it in "Add Google Sheet Links" section in sidebar
+                    4. Click "Sync Now" again
+                    
+                    **Or upload Excel/CSV files to your Drive folder**
+                    
+                    📞 Contact Mahendra: 7627068716 for help
+                    """)
+                    st.stop()
+        
+        if 'gdrive_dfs' in st.session_state:
+            dfs = st.session_state['gdrive_dfs']
+        if 'file_info' in st.session_state:
+            file_info = st.session_state['file_info']
+    
+    else:
+        st.sidebar.error("⚠️ Invalid link format")
+        st.error("⚠️ Could not recognize the link format. Please provide a valid Google Drive folder or Google Sheet link.\n\n📞 Contact Mahendra: 7627068716 for help")
         st.stop()
-    
-    st.sidebar.info(f"📁 Syncing from your Google Drive folder")
-    
-    if st.sidebar.button("🔄 Sync Now") or 'gdrive_loaded' not in st.session_state:
-        with st.spinner("Downloading files from Google Drive..."):
-            files = download_from_gdrive_folder(folder_id)
-            
-            if files is None:
-                st.sidebar.error("❌ Could not access Google Drive folder")
-                st.error("⚠️ Kindly make link visible for all (Anyone with the link can view)\n\n📞 Contact Mahendra: 7627068716 for help")
-                st.stop()
-            
-            if not files:
-                st.sidebar.warning("📂 No data files found in folder")
-                st.warning("📂 No Excel/CSV files found. Please upload data to your Google Drive folder.")
-                st.stop()
-            
-            temp_file_info = []
-            for file_type, f in files:
-                try:
-                    if file_type == "csv":
-                        temp_df = pd.read_csv(f)
-                    else:
-                        temp_df = pd.read_excel(f)
-                    dfs.append(temp_df)
-                    temp_file_info.append({"name": Path(f).name, "rows": len(temp_df), "cols": len(temp_df.columns)})
-                except Exception as e:
-                    st.warning(f"Skipped file: {Path(f).name} - {e}")
-            
-            if dfs:
-                st.session_state['gdrive_loaded'] = True
-                st.session_state['gdrive_dfs'] = dfs
-                st.session_state['file_info'] = temp_file_info
-                st.sidebar.success(f"✅ Loaded {len(dfs)} files")
-            else:
-                st.sidebar.error("❌ Could not load any files")
-                st.error("❌ Could not load data files. Please check file format.")
-                st.stop()
-    
-    if 'gdrive_dfs' in st.session_state:
-        dfs = st.session_state['gdrive_dfs']
-    if 'file_info' in st.session_state:
-        file_info = st.session_state['file_info']
 
 if not dfs:
     st.info("📁 Click 'Sync Now' to load data, or switch to Manual Upload")
@@ -537,7 +620,6 @@ sub_col = detect(df, ["sub-category", "sub category", "subcategory", "sub_catego
 desc_col = detect(df, ["merchant", "person", "description", "name"])
 type_col = detect(df, ["paid", "received", "type"])
 
-# Store detection info for debug tab
 detection_info = {
     "Date Column": date_col,
     "Time Column": time_col,
@@ -548,51 +630,45 @@ detection_info = {
     "Type Column": type_col
 }
 
-# Validate required columns
 if not date_col:
     st.error("❌ Could not find a Date column. Please ensure your data has a column with 'date' in the name.")
+    st.write("**Available columns:**", list(df.columns))
     st.stop()
 
 if not amt_col:
     st.error("❌ Could not find an Amount column. Please ensure your data has a column with 'amount' in the name.")
+    st.write("**Available columns:**", list(df.columns))
     st.stop()
 
-# Parse Date
 try:
     df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
 except Exception as e:
     st.error(f"Error parsing dates: {e}")
     st.stop()
 
-# Parse Amount
 df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce").fillna(0)
 
-# Parse Time and extract Hour
 if time_col:
     df["Hour"] = df[time_col].apply(parse_time_to_hour)
 else:
     df["Hour"] = 12
 
-# Create standardized columns
 df["Category"] = df[cat_col].fillna("Uncategorized") if cat_col else "Uncategorized"
 df["Sub Category"] = df[sub_col].fillna("Uncategorized") if sub_col else "Uncategorized"
 df["Description"] = df[desc_col].fillna("Unknown") if desc_col else "Unknown"
 df["Transaction Type"] = df[type_col].fillna("Paid") if type_col else "Paid"
 
-# Create derived columns
 df["Month"] = df[date_col].dt.to_period("M").astype(str)
 df["Weekday"] = df[date_col].dt.day_name()
 df["WeekType"] = df.apply(lambda row: determine_weekend(row, date_col), axis=1)
 df["TimePeriod"] = df["Hour"].apply(get_time_period)
 
-# Remove rows with invalid dates
 df = df.dropna(subset=[date_col])
 
 if df.empty:
     st.error("❌ No valid data found after processing. Please check your data format.")
     st.stop()
 
-# Calculate data quality score
 data_quality_score, data_issues = get_data_quality_score(df, date_col, amt_col, cat_col, time_col)
 
 # =========================================================
@@ -656,7 +732,6 @@ with tab1:
 with tab2:
     st.markdown(f"### 📅 {format_month(selected_month)} Overview")
     
-    # KPIs
     k1,k2,k3,k4 = st.columns(4)
     
     total_spend = month_df[amt_col].sum()
@@ -682,7 +757,6 @@ with tab2:
             unsafe_allow_html=True
         )
     
-    # Budget + Composition
     left, right = st.columns([1.4, 1])
     
     with left:
@@ -750,7 +824,6 @@ with tab2:
         else:
             st.info("No data for composition chart")
     
-    # Category vs Day
     st.markdown("#### 📆 Spending Pattern")
     c1, c2 = st.columns(2)
     
@@ -774,7 +847,6 @@ with tab2:
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
-    # Time-based Analysis
     st.markdown("#### ⏰ Time-based Analysis")
     h1, h2 = st.columns(2)
     
@@ -811,7 +883,6 @@ with tab2:
         fig.update_xaxes(tickangle=45)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
-    # Weekday vs Weekend
     st.markdown("### 📅 Weekday vs Weekend Behaviour")
     st.caption("*Weekend includes Friday after 7:00 PM, Saturday, and Sunday")
     
@@ -964,7 +1035,6 @@ with tab6:
     </div>
     """, unsafe_allow_html=True)
     
-    # Data Issues
     if data_issues:
         st.markdown("#### ⚠️ Data Issues Found")
         for issue in data_issues:
@@ -1010,7 +1080,7 @@ with tab6:
         st.markdown("**Sample Values (First Row):**")
         if not df.empty:
             first_row = df.iloc[0]
-            for col in df.columns[:6]:  # Show first 6 columns
+            for col in df.columns[:6]:
                 st.markdown(f"""
                 <div class="debug-card">
                     <div class="debug-title">{col}</div>
@@ -1024,10 +1094,11 @@ with tab6:
     st.markdown("#### 📁 Loaded Files")
     if file_info:
         for f in file_info:
+            file_type_icon = "📄" if f.get('type') == 'gsheet' else "📊" if f.get('type') == 'excel' else "📋"
             st.markdown(f"""
             <div class="debug-card">
-                <div class="debug-title">📄 {f['name']}</div>
-                <div class="debug-value">{f['rows']} rows × {f['cols']} columns</div>
+                <div class="debug-title">{file_type_icon} {f['name']}</div>
+                <div class="debug-value">{f['rows']} rows × {f['cols']} columns | Type: {f.get('type', 'unknown')}</div>
             </div>
             """, unsafe_allow_html=True)
     else:
@@ -1119,11 +1190,10 @@ with tab6:
     
     drive_link = st.session_state.get('user_drive_link', '')
     if drive_link:
-        # Mask the link for security
-        masked_link = drive_link[:30] + "..." if len(drive_link) > 30 else drive_link
+        masked_link = drive_link[:40] + "..." if len(drive_link) > 40 else drive_link
         st.markdown(f"""
         <div class="debug-card">
-            <div class="debug-title">📁 Drive Link</div>
+            <div class="debug-title">📁 Data Source Link</div>
             <div class="debug-value">{masked_link}</div>
         </div>
         """, unsafe_allow_html=True)
