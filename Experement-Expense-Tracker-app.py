@@ -34,9 +34,13 @@ def initialize_all_session_states():
         'gdrive_dfs': [],
         'file_info': [],
         'debug_log': [],
+        # Tab 2 Filters
         'cat_filter': {},
         'sub_filter': {},
         'metric_choice': "Total Spend",
+        # Tab 1 Independent Filters
+        'habits_cat_filter': {},
+        'habits_sub_filter': {},
         'filters_initialized': False,
     }
     
@@ -606,7 +610,7 @@ with tab1:
     st.markdown("### 📈 Long-term Trends")
     c1, c2 = st.columns(2)
     
-    # Top charts remain Unfiltered (Global view)
+    # Top charts remain Global (Unfiltered by default)
     with c1:
         fig = px.line(df.groupby(["Month", "Category"])[amt_col].sum().reset_index(), 
                       x="Month", y=amt_col, color="Category", template="plotly_dark", title="By Category")
@@ -619,33 +623,75 @@ with tab1:
         fig.update_layout(xaxis_fixedrange=True, yaxis_fixedrange=True)
         st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
     
+    st.markdown("---")
+    
     # =========================================================
-    # APPLY FILTERS FROM TAB 2 TO HABITS
+    # INDEPENDENT FILTERS FOR HABITS
     # =========================================================
-    # 1. Get all unique categories/subcategories
-    all_cats_global = df["Category"].unique()
-    all_subs_global = df["Sub Category"].unique()
+    st.markdown("### 🔍 Filter Habits Analysis")
+    st.caption("Filters below affect ONLY the 'Spending Habits' and 'Weekly Pattern' charts in this tab.")
 
-    # 2. Check Session State for active filters (Defaults to True if not set yet)
-    sel_cats_habits = [c for c in all_cats_global if st.session_state['cat_filter'].get(c, True)]
-    sel_subs_habits = [s for s in all_subs_global if st.session_state['sub_filter'].get(s, True)]
+    # Initialize INDEPENDENT session state for Tab 1 filters if not exists
+    if 'habits_cat_filter' not in st.session_state:
+        st.session_state['habits_cat_filter'] = {cat: True for cat in df["Category"].unique()}
+    if 'habits_sub_filter' not in st.session_state:
+        st.session_state['habits_sub_filter'] = {sub: True for sub in df["Sub Category"].unique()}
 
-    # 3. Create a filtered DataFrame specifically for Habits
-    habits_df = df[
-        (df["Category"].isin(sel_cats_habits)) & 
-        (df["Sub Category"].isin(sel_subs_habits))
-    ]
+    hf1, hf2 = st.columns(2)
+    
+    all_cats_habits = sorted(df["Category"].unique().tolist())
+    
+    # 1. Category Filter (Independent)
+    with hf1:
+        with st.popover("🏷️ Filter Categories (Habits)"):
+            ha, hb = st.columns(2)
+            if ha.button("All", key="habits_all_cat", use_container_width=True):
+                for c in all_cats_habits:
+                    st.session_state['habits_cat_filter'][c] = True
+            if hb.button("None", key="habits_none_cat", use_container_width=True):
+                for c in all_cats_habits:
+                    st.session_state['habits_cat_filter'][c] = False
+            st.markdown("---")
+            for cat in all_cats_habits:
+                if cat not in st.session_state['habits_cat_filter']:
+                     st.session_state['habits_cat_filter'][cat] = True
+                st.session_state['habits_cat_filter'][cat] = st.checkbox(cat, value=st.session_state['habits_cat_filter'][cat], key=f"habits_cf_{cat}")
+
+    sel_cats_h = [c for c in all_cats_habits if st.session_state['habits_cat_filter'].get(c, True)]
+    
+    # Filter for subcats based on selected cats
+    habits_interim_df = df[df["Category"].isin(sel_cats_h)]
+    all_subs_habits = sorted(habits_interim_df["Sub Category"].unique().tolist())
+
+    # 2. Sub-Category Filter (Independent)
+    with hf2:
+        with st.popover("📂 Filter Sub-categories (Habits)"):
+            hsa, hsb = st.columns(2)
+            if hsa.button("All", key="habits_all_sub", use_container_width=True):
+                for s in all_subs_habits:
+                    st.session_state['habits_sub_filter'][s] = True
+            if hsb.button("None", key="habits_none_sub", use_container_width=True):
+                for s in all_subs_habits:
+                    st.session_state['habits_sub_filter'][s] = False
+            st.markdown("---")
+            for sub in all_subs_habits:
+                if sub not in st.session_state['habits_sub_filter']:
+                    st.session_state['habits_sub_filter'][sub] = True
+                st.session_state['habits_sub_filter'][sub] = st.checkbox(sub, value=st.session_state['habits_sub_filter'].get(sub, True), key=f"habits_sf_{sub}")
+
+    sel_subs_h = [s for s in all_subs_habits if st.session_state['habits_sub_filter'].get(s, True)]
+
+    # 3. Create Final Filtered DataFrame for Habits
+    habits_df = habits_interim_df[habits_interim_df["Sub Category"].isin(sel_subs_h)]
+
+    # Show summary
+    if len(habits_df) < len(df):
+        st.info(f"⚡ Showing {len(habits_df):,} of {len(df):,} transactions based on above filters.")
 
     # =========================================================
-    # SPENDING HABITS - TIME ANALYSIS (FILTERED)
+    # SPENDING HABITS - TIME ANALYSIS
     # =========================================================
     st.markdown("### 🕐 Spending Habits (All Time)")
-    
-    # Show feedback if filters are active
-    if len(habits_df) < len(df):
-        st.info(f"🌪️ Filters applied from 'Monthly' tab. Showing {len(habits_df):,} of {len(df):,} transactions.")
-    else:
-        st.caption("Your overall spending patterns across all months")
     
     if not habits_df.empty:
         h1, h2 = st.columns(2)
@@ -668,7 +714,7 @@ with tab1:
             st.plotly_chart(fig, use_container_width=True, config=get_chart_config())
         
         # =========================================================
-        # WEEKLY PATTERN (FILTERED)
+        # WEEKLY PATTERN
         # =========================================================
         st.markdown("### 📅 Weekly Pattern (All Time)")
         w1, w2 = st.columns([2.2, 1])
