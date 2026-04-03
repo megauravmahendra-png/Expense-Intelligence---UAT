@@ -89,27 +89,18 @@ def apply_brain_to_df(df: pd.DataFrame):
 # =========================================================
 
 def parse_google_pay_pdf(uploaded_file) -> pd.DataFrame:
-    """
-    Robust parser for Google Pay PDF (your exact format).
-    Handles:
-    - 01Feb,2026 PaidtoXYZ ₹30
-    - Receivedfrom
-    - Selftransfers
-    """
+    import pdfplumber
+    import pandas as pd
+    import re
 
     rows = []
 
     try:
-        import pdfplumber
-        import re
-        import pandas as pd
-
         with pdfplumber.open(uploaded_file) as pdf:
             for page in pdf.pages:
-
                 text = page.extract_text() or ""
 
-                # ✅ CLEAN TEXT (VERY IMPORTANT)
+                # 🔥 CLEAN TEXT (CRITICAL)
                 text = re.sub(r'(?<=\d)(?=[A-Za-z])', ' ', text)
                 text = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', text)
 
@@ -117,54 +108,79 @@ def parse_google_pay_pdf(uploaded_file) -> pd.DataFrame:
 
                 for line in lines:
                     line = line.strip()
-                    if not line:
+
+                    # ✅ Only process lines with ₹
+                    if "₹" not in line:
                         continue
 
-                    # ✅ MAIN GOOGLE PAY PATTERN
-                    m = re.match(
-                        r"(\d{1,2}\s?[A-Za-z]{3},\s?\d{4})\s+"
-                        r"(Paid to|Received from|Self transfer to)\s*"
-                        r"([A-Za-z0-9\s]+?)\s+₹\s*([\d,]+\.?\d*)",
-                        line,
-                        re.IGNORECASE
-                    )
+                    try:
+                        # -----------------------------
+                        # STEP 1: EXTRACT DATE
+                        # -----------------------------
+                        date_match = re.search(r'\d{1,2}\s?[A-Za-z]{3},\s?\d{4}', line)
+                        if not date_match:
+                            continue
 
-                    if m:
-                        try:
-                            date_str = m.group(1)
-                            tx_type = m.group(2).lower()
-                            merchant = m.group(3)
-                            amount = float(m.group(4).replace(",", ""))
+                        date_str = date_match.group()
 
-                            # ✅ Skip incoming money
-                            if "received" in tx_type:
-                                continue
+                        # -----------------------------
+                        # STEP 2: EXTRACT AMOUNT
+                        # -----------------------------
+                        amt_match = re.search(r'₹\s*([\d,]+\.?\d*)', line)
+                        if not amt_match:
+                            continue
 
-                            # ✅ Clean merchant
-                            merchant = re.sub(r'[^A-Za-z ]', '', merchant)
-                            merchant = merchant.lower().strip()
-                            merchant = re.sub(r'\s+', ' ', merchant)
+                        amount = float(amt_match.group(1).replace(",", ""))
 
-                            date = pd.to_datetime(date_str, format="%d %b,%Y", errors="coerce")
+                        # -----------------------------
+                        # STEP 3: IDENTIFY TYPE
+                        # -----------------------------
+                        line_lower = line.lower()
 
-                            if pd.isna(date):
-                                # fallback parsing
-                                date = pd.to_datetime(date_str, errors="coerce")
+                        if "receivedfrom" in line_lower:
+                            continue  # skip credit
 
-                            if pd.isna(date):
-                                continue
+                        # -----------------------------
+                        # STEP 4: EXTRACT MERCHANT
+                        # -----------------------------
+                        merchant = ""
 
-                            rows.append({
-                                "Date": date,
-                                "Description": merchant.title(),
-                                "Amount": amount,
-                                "Category": "Uncategorized",
-                                "Sub Category": "Uncategorized",
-                                "Source": "PDF"
-                            })
+                        if "paidto" in line_lower:
+                            merchant = re.split("paidto", line, flags=re.IGNORECASE)[1]
+                        elif "selftransferto" in line_lower:
+                            continue  # skip self transfer
+                        else:
+                            continue
 
-                        except Exception:
-                            pass
+                        # remove amount from merchant
+                        merchant = merchant.split("₹")[0]
+
+                        # clean merchant
+                        merchant = re.sub(r'[^A-Za-z ]', '', merchant)
+                        merchant = merchant.lower().strip()
+                        merchant = re.sub(r'\s+', ' ', merchant)
+
+                        if not merchant:
+                            continue
+
+                        # -----------------------------
+                        # STEP 5: DATE PARSE
+                        # -----------------------------
+                        date = pd.to_datetime(date_str, errors="coerce")
+                        if pd.isna(date):
+                            continue
+
+                        rows.append({
+                            "Date": date,
+                            "Description": merchant.title(),
+                            "Amount": amount,
+                            "Category": "Uncategorized",
+                            "Sub Category": "Uncategorized",
+                            "Source": "PDF"
+                        })
+
+                    except:
+                        continue
 
     except Exception as e:
         st.error(f"PDF parsing error: {e}")
@@ -178,7 +194,6 @@ def parse_google_pay_pdf(uploaded_file) -> pd.DataFrame:
         return df
 
     return pd.DataFrame()
-
 
 def extract_pdf_raw_text(uploaded_file) -> str:
     """Extract all raw text from a PDF for debugging."""
