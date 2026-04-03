@@ -136,20 +136,26 @@ def build_brain_df(df):
 # ==========================================
 def upload_to_gsheet(df):
     try:
+        st.write("🚀 Starting upload...")
+
         sheet = connect_gsheet()
+        st.write("✅ Connected to Google Sheet")
+
+        st.write("📊 Data rows:", len(df))
 
         # clear existing data
         sheet.clear()
+        st.write("🧹 Sheet cleared")
 
         # write new data
         sheet.update([df.columns.values.tolist()] + df.values.tolist())
+        st.write("✅ Data written")
 
         return True
 
     except Exception as e:
         st.error(f"❌ Upload failed: {e}")
         return False
-
 # ==========================================
 # STREAMLIT UI
 # ==========================================
