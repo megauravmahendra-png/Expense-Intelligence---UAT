@@ -11,26 +11,22 @@ from google.oauth2.service_account import Credentials
 SHEET_ID = "1NrNZ6adL8lsNRVFcpwmrTroHnem4I082Xv--_ruG43Y"
 
 # ==========================================
+# INIT SESSION
+# ==========================================
+if "brain_df" not in st.session_state:
+    st.session_state.brain_df = None
+
+# ==========================================
 # GOOGLE SHEETS CONNECTION
 # ==========================================
 def connect_gsheet():
-    try:
-        st.write("🔐 Loading credentials...")
-
-        creds = Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-
-        client = gspread.authorize(creds)
-        sheet = client.open_by_key(SHEET_ID).sheet1
-
-        st.write("✅ Connected to Google Sheet")
-        return sheet
-
-    except Exception as e:
-        st.error(f"❌ Connection failed: {e}")
-        return None
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    client = gspread.authorize(creds)
+    sheet = client.open_by_key(SHEET_ID).sheet1
+    return sheet
 
 # ==========================================
 # COLUMN DETECTION
@@ -43,7 +39,7 @@ def detect_column(df, possible_names):
     return None
 
 # ==========================================
-# MERCHANT NORMALIZATION
+# NORMALIZATION
 # ==========================================
 STOP_WORDS = [
     "private", "limited", "ltd", "pvt", "pvt ltd",
@@ -62,7 +58,7 @@ def normalize_merchant(name):
     return name.split()[0] if name else name
 
 # ==========================================
-# BUILD BRAIN DATA
+# BUILD BRAIN
 # ==========================================
 def build_brain_df(df):
 
@@ -77,31 +73,14 @@ def build_brain_df(df):
         "Sub Category": subcat_col
     })
 
-    if not desc_col:
-        st.error("❌ Description column not found")
-        return pd.DataFrame()
-
-    # assign columns
     df["merchant_raw"] = df[desc_col].astype(str)
+    df["Category"] = df[cat_col]
+    df["Sub Category"] = df[subcat_col] if subcat_col else "General"
 
-    if cat_col:
-        df["Category"] = df[cat_col]
-    else:
-        st.warning("⚠️ No Category column found → using 'Uncategorized'")
-        df["Category"] = "Uncategorized"
-
-    if subcat_col:
-        df["Sub Category"] = df[subcat_col]
-    else:
-        df["Sub Category"] = "General"
-
-    # normalize
     df["merchant_key"] = df["merchant_raw"].apply(normalize_merchant)
 
-    # DEBUG SHAPES
     st.write("📊 Before filtering:", df.shape)
 
-    # filtering
     df_filtered = df[df["Category"].notna()]
 
     if df_filtered.empty:
@@ -110,14 +89,12 @@ def build_brain_df(df):
 
     st.write("📊 After filtering:", df_filtered.shape)
 
-    # group
     grouped = df_filtered.groupby("merchant_key").agg({
         "merchant_raw": "first",
         "Category": lambda x: x.mode()[0] if not x.mode().empty else "Other",
         "Sub Category": lambda x: x.mode()[0] if not x.mode().empty else "General",
     }).reset_index()
 
-    # seen count
     seen_counts = df_filtered.groupby("merchant_key").size().reset_index(name="seen")
     grouped = grouped.merge(seen_counts, on="merchant_key", how="left")
 
@@ -131,47 +108,30 @@ def build_brain_df(df):
 
     st.write("📊 Final Brain DF Shape:", grouped.shape)
 
-    return grouped[[
-        "merchant_key",
-        "merchant",
-        "category",
-        "sub_category",
-        "seen",
-        "last_updated"
-    ]]
+    return grouped
 
 # ==========================================
-# UPLOAD TO GOOGLE SHEET
+# UPLOAD
 # ==========================================
 def upload_to_gsheet(df):
     try:
-        st.write("🚀 Starting upload...")
+        st.write("🚀 Uploading...")
 
         sheet = connect_gsheet()
-        if sheet is None:
-            return False
-
-        st.write("📊 Rows to upload:", len(df))
 
         sheet.clear()
-        st.write("🧹 Sheet cleared")
-
         sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
-        st.success("🎉 Upload successful!")
-
-        return True
-
+        st.success("🎉 Uploaded successfully!")
     except Exception as e:
         st.error(f"❌ Upload failed: {e}")
-        return False
 
 # ==========================================
-# STREAMLIT UI
+# UI
 # ==========================================
 st.set_page_config(page_title="Brain Builder", layout="wide")
 
-st.title("🧠 Brain Builder (FINAL DEBUG VERSION)")
+st.title("🧠 Brain Builder (FINAL)")
 
 file = st.file_uploader("Upload your file", type=["xlsx", "csv"])
 
@@ -183,23 +143,21 @@ if file:
 
     st.write("🧾 Columns:", list(df.columns))
 
+    # BUILD
     if st.button("🧠 Build Brain"):
-        brain_df = build_brain_df(df)
+        st.session_state.brain_df = build_brain_df(df)
 
-        if not brain_df.empty:
-            st.dataframe(brain_df)
+# SHOW RESULT (PERSISTENT)
+if st.session_state.brain_df is not None:
+    st.subheader("🧠 Brain Data")
+    st.dataframe(st.session_state.brain_df)
 
-            if st.button("🚀 Upload to Google Sheet"):
-                upload_to_gsheet(brain_df)
+    if st.button("🚀 Upload to Google Sheet"):
+        upload_to_gsheet(st.session_state.brain_df)
 
-# ==========================================
-# TEST BUTTON
-# ==========================================
+# TEST
 st.divider()
-st.subheader("🧪 Connection Test")
-
 if st.button("TEST GOOGLE SHEET"):
     sheet = connect_gsheet()
-    if sheet:
-        sheet.update([["test"], ["hello working"]])
-        st.success("✅ Test successful")
+    sheet.update([["test"], ["hello working"]])
+    st.success("✅ Test successful")
