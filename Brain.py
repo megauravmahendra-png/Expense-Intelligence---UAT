@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 SHEET_ID = "1NrNZ6adL8lsNRVFcpwmrTroHnem4I082Xv--_ruG43Y"
 
 # ==========================================
-# GOOGLE SHEETS CONNECTION (STREAMLIT CLOUD)
+# GOOGLE SHEETS CONNECTION
 # ==========================================
 def connect_gsheet():
     creds = Credentials.from_service_account_info(
@@ -21,6 +21,16 @@ def connect_gsheet():
     client = gspread.authorize(creds)
     sheet = client.open_by_key(SHEET_ID).sheet1
     return sheet
+
+# ==========================================
+# COLUMN DETECTION
+# ==========================================
+def detect_column(df, possible_names):
+    for col in df.columns:
+        for name in possible_names:
+            if name.lower() in col.lower():
+                return col
+    return None
 
 # ==========================================
 # MERCHANT NORMALIZATION
@@ -47,25 +57,52 @@ def normalize_merchant(name):
     return name.split()[0] if name else name
 
 # ==========================================
-# BUILD BRAIN DATAFRAME
+# BUILD BRAIN DATA
 # ==========================================
 def build_brain_df(df):
 
-    # ensure columns exist
-    required_cols = ["Description", "Category", "Sub Category"]
-    for col in required_cols:
-        if col not in df.columns:
-            st.error(f"Missing column: {col}")
-            return pd.DataFrame()
+    # detect columns
+    desc_col = detect_column(df, ["description", "narration", "merchant", "details", "name"])
+    cat_col = detect_column(df, ["category"])
+    subcat_col = detect_column(df, ["sub category", "subcategory", "sub-category"])
 
-    df["merchant_raw"] = df["Description"].astype(str)
+    # debug view
+    st.write("📌 Detected Columns:")
+    st.write({
+        "Description": desc_col,
+        "Category": cat_col,
+        "Sub Category": subcat_col
+    })
+
+    if not desc_col:
+        st.error("❌ Could not detect Description column")
+        return pd.DataFrame()
+
+    if not cat_col:
+        st.error("❌ Could not detect Category column")
+        return pd.DataFrame()
+
+    # assign columns
+    df["merchant_raw"] = df[desc_col].astype(str)
+    df["Category"] = df[cat_col]
+
+    if subcat_col:
+        df["Sub Category"] = df[subcat_col]
+    else:
+        df["Sub Category"] = "General"
+
+    # normalize merchant
     df["merchant_key"] = df["merchant_raw"].apply(normalize_merchant)
 
     # remove uncategorized
     df = df[df["Category"].notna()]
     df = df[df["Category"] != "Uncategorized"]
 
-    # group by merchant_key
+    if df.empty:
+        st.warning("⚠️ No categorized data found")
+        return pd.DataFrame()
+
+    # aggregate
     grouped = df.groupby("merchant_key").agg({
         "merchant_raw": "first",
         "Category": lambda x: x.mode()[0] if not x.mode().empty else "Other",
@@ -78,6 +115,7 @@ def build_brain_df(df):
 
     grouped["last_updated"] = datetime.now().strftime("%Y-%m-%d")
 
+    # rename
     grouped = grouped.rename(columns={
         "merchant_raw": "merchant",
         "Category": "category",
@@ -107,8 +145,9 @@ def upload_to_gsheet(df):
         sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
         return True
+
     except Exception as e:
-        st.error(f"Upload failed: {e}")
+        st.error(f"❌ Upload failed: {e}")
         return False
 
 # ==========================================
@@ -125,6 +164,8 @@ if file:
 
     st.subheader("📊 Data Preview")
     st.dataframe(df.head())
+
+    st.write("🧾 Available Columns:", list(df.columns))
 
     if st.button("🧠 Build Brain"):
         brain_df = build_brain_df(df)
