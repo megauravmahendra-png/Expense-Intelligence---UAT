@@ -90,97 +90,93 @@ def apply_brain_to_df(df: pd.DataFrame):
 
 def parse_google_pay_pdf(uploaded_file) -> pd.DataFrame:
     """
-    Parse a Google Pay statement PDF.
-    Tries to extract: Date, Description (merchant), Amount, Status.
-    Returns a DataFrame with standardized columns.
+    Robust parser for Google Pay PDF (your exact format).
+    Handles:
+    - 01Feb,2026 PaidtoXYZ ₹30
+    - Receivedfrom
+    - Selftransfers
     """
+
     rows = []
+
     try:
+        import pdfplumber
+        import re
+        import pandas as pd
+
         with pdfplumber.open(uploaded_file) as pdf:
             for page in pdf.pages:
+
                 text = page.extract_text() or ""
+
+                # ✅ CLEAN TEXT (VERY IMPORTANT)
+                text = re.sub(r'(?<=\d)(?=[A-Za-z])', ' ', text)
+                text = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', text)
+
                 lines = text.split("\n")
+
                 for line in lines:
                     line = line.strip()
                     if not line:
                         continue
-                    # Common Google Pay / HDFC / ICICI / Axis statement patterns
-                    # Pattern 1: DD MMM YYYY | Merchant | ₹ Amount (Debit/Credit)
+
+                    # ✅ MAIN GOOGLE PAY PATTERN
                     m = re.match(
-                        r"(\d{1,2}[\s\-/]\w{3}[\s\-/]\d{2,4})\s+(.+?)\s+[₹Rs.]*\s*([\d,]+\.?\d*)\s*(Dr|Cr|Debit|Credit)?",
-                        line, re.IGNORECASE
+                        r"(\d{1,2}\s?[A-Za-z]{3},\s?\d{4})\s+"
+                        r"(Paid to|Received from|Self transfer to)\s*"
+                        r"([A-Za-z0-9\s]+?)\s+₹\s*([\d,]+\.?\d*)",
+                        line,
+                        re.IGNORECASE
                     )
+
                     if m:
                         try:
-                            date_str = m.group(1).strip()
-                            desc = m.group(2).strip()
-                            amount = float(m.group(3).replace(",", ""))
-                            tx_type = m.group(4) or "Dr"
-                            if "cr" in tx_type.lower() or "credit" in tx_type.lower():
-                                continue  # skip credits/refunds
-                            date = pd.to_datetime(date_str, dayfirst=True, errors="coerce")
+                            date_str = m.group(1)
+                            tx_type = m.group(2).lower()
+                            merchant = m.group(3)
+                            amount = float(m.group(4).replace(",", ""))
+
+                            # ✅ Skip incoming money
+                            if "received" in tx_type:
+                                continue
+
+                            # ✅ Clean merchant
+                            merchant = re.sub(r'[^A-Za-z ]', '', merchant)
+                            merchant = merchant.lower().strip()
+                            merchant = re.sub(r'\s+', ' ', merchant)
+
+                            date = pd.to_datetime(date_str, format="%d %b,%Y", errors="coerce")
+
+                            if pd.isna(date):
+                                # fallback parsing
+                                date = pd.to_datetime(date_str, errors="coerce")
+
                             if pd.isna(date):
                                 continue
+
                             rows.append({
                                 "Date": date,
-                                "Description": desc,
+                                "Description": merchant.title(),
                                 "Amount": amount,
                                 "Category": "Uncategorized",
                                 "Sub Category": "Uncategorized",
                                 "Source": "PDF"
                             })
-                        except:
+
+                        except Exception:
                             pass
-                    
-                    # Pattern 2: Table rows extracted by pdfplumber table
-                
-                # Also try table extraction
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        if not row or len(row) < 3:
-                            continue
-                        row = [str(c).strip() if c else "" for c in row]
-                        # Try to identify date, description, amount columns
-                        date_val, desc_val, amount_val = None, None, None
-                        for cell in row:
-                            if not date_val:
-                                d = pd.to_datetime(cell, dayfirst=True, errors="coerce")
-                                if pd.notna(d):
-                                    date_val = d
-                            if not amount_val:
-                                amt_match = re.search(r"[\d,]+\.?\d*", cell.replace("₹","").replace("Rs",""))
-                                if amt_match and date_val:
-                                    try:
-                                        amount_val = float(amt_match.group().replace(",",""))
-                                    except:
-                                        pass
-                        if date_val and amount_val and amount_val > 0:
-                            # Description: longest non-empty, non-date, non-amount cell
-                            for cell in row:
-                                if cell and not re.match(r"^[\d/\-\.₹,Rs]+$", cell) and len(cell) > 3:
-                                    desc_val = cell
-                                    break
-                            desc_val = desc_val or "Unknown"
-                            # Skip if already captured by text parsing
-                            duplicate = any(
-                                r["Date"] == date_val and abs(r["Amount"] - amount_val) < 1
-                                for r in rows
-                            )
-                            if not duplicate:
-                                rows.append({
-                                    "Date": date_val,
-                                    "Description": desc_val,
-                                    "Amount": amount_val,
-                                    "Category": "Uncategorized",
-                                    "Sub Category": "Uncategorized",
-                                    "Source": "PDF"
-                                })
+
     except Exception as e:
         st.error(f"PDF parsing error: {e}")
-    
+
     if rows:
-        return pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
+
+        # ✅ REMOVE DUPLICATES
+        df = df.drop_duplicates(subset=["Date", "Description", "Amount"])
+
+        return df
+
     return pd.DataFrame()
 
 
