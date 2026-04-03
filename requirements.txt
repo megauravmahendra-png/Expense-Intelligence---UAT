@@ -10,3 +10,5 @@ python-Levenshtein
 pdfplumber
 beautifulsoup4
 requests
+gspread
+google-auth
