@@ -13,7 +13,7 @@ st.set_page_config(layout="wide")
 st.title("📄 GPay PDF Extractor")
 
 # =========================================================
-# PDF PARSER (FINAL STABLE)
+# FINAL PARSER (TEXT-BASED REGEX)
 # =========================================================
 def parse_pdf(file):
 
@@ -21,75 +21,64 @@ def parse_pdf(file):
 
     with pdfplumber.open(file) as pdf:
 
-        all_lines = []
+        full_text = ""
 
-        # Extract all text lines
         for page in pdf.pages:
-            text = page.extract_text() or ""
-            lines = [l.strip() for l in text.split("\n") if l.strip()]
-            all_lines.extend(lines)
+            text = page.extract_text()
+            if text:
+                full_text += text + "\n"
 
-        i = 0
-        while i < len(all_lines):
+    # 🔥 KEY FIX: normalize text
+    full_text = re.sub(r'\n+', '\n', full_text)
 
-            line = all_lines[i]
+    # Split using DATE as anchor
+    pattern = r'(\d{2} \w{3}, \d{4}\s+\d{2}:\d{2} [AP]M.*?)₹\s*([\d,]+\.\d+|\d+)'
 
-            # Detect transaction start (Date)
-            if re.match(r"\d{2} \w{3}, \d{4}", line):
+    matches = re.findall(pattern, full_text, re.DOTALL)
 
-                try:
-                    date = pd.to_datetime(line, format="%d %b, %Y", errors="coerce")
+    for block, amount in matches:
 
-                    # Time
-                    time = ""
-                    if i+1 < len(all_lines) and re.search(r"\d{1,2}:\d{2}", all_lines[i+1]):
-                        time = all_lines[i+1]
+        try:
+            # Date + Time
+            dt_match = re.search(r'(\d{2} \w{3}, \d{4})\s+(\d{2}:\d{2} [AP]M)', block)
 
-                    txn_type = "Other"
-                    description = "Unknown"
-                    upi_id = ""
-                    amount = None
+            if not dt_match:
+                continue
 
-                    # Scan transaction block
-                    for j in range(i+1, min(i+12, len(all_lines))):
+            date = pd.to_datetime(dt_match.group(1), format="%d %b, %Y", errors="coerce")
+            time = dt_match.group(2)
 
-                        l = all_lines[j]
+            # Type + Description
+            if "Paid to" in block:
+                txn_type = "Debit"
+                desc = re.search(r'Paid to (.*)', block)
+            elif "Received from" in block:
+                txn_type = "Credit"
+                desc = re.search(r'Received from (.*)', block)
+            else:
+                txn_type = "Other"
+                desc = None
 
-                        if "Paid to" in l:
-                            txn_type = "Debit"
-                            description = l.replace("Paid to", "").strip()
+            description = desc.group(1).split("UPI")[0].strip() if desc else "Unknown"
 
-                        elif "Received from" in l:
-                            txn_type = "Credit"
-                            description = l.replace("Received from", "").strip()
+            # UPI ID
+            upi_match = re.search(r'UPI Transaction ID:\s*(\d+)', block)
+            upi_id = upi_match.group(1) if upi_match else ""
 
-                        elif "Self transfer" in l:
-                            txn_type = "Self"
-                            description = "Self Transfer"
+            # Amount
+            amt = float(amount.replace(",", ""))
 
-                        if "UPI Transaction ID" in l:
-                            upi_id = l.split(":")[-1].strip()
+            records.append({
+                "Date": date,
+                "Time": time,
+                "Description": description,
+                "Type": txn_type,
+                "Amount": amt,
+                "UPI_ID": upi_id
+            })
 
-                        if "₹" in l:
-                            amt = re.sub(r"[^\d.]", "", l)
-                            if amt:
-                                amount = float(amt)
-
-                    # Save valid transactions
-                    if amount is not None:
-                        records.append({
-                            "Date": date,
-                            "Time": time,
-                            "Description": description,
-                            "Type": txn_type,
-                            "Amount": amount,
-                            "UPI_ID": upi_id
-                        })
-
-                except:
-                    pass
-
-            i += 1
+        except:
+            continue
 
     df = pd.DataFrame(records)
 
