@@ -13,7 +13,7 @@ st.set_page_config(layout="wide")
 st.title("📄 GPay PDF Extractor")
 
 # =========================================================
-# FINAL PARSER (TEXT-BASED REGEX)
+# FINAL PARSER (STATE MACHINE - CORRECT)
 # =========================================================
 def parse_pdf(file):
 
@@ -21,64 +21,90 @@ def parse_pdf(file):
 
     with pdfplumber.open(file) as pdf:
 
-        full_text = ""
+        lines = []
 
+        # Extract all lines cleanly
         for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                full_text += text + "\n"
+            text = page.extract_text() or ""
+            page_lines = [l.strip() for l in text.split("\n") if l.strip()]
+            lines.extend(page_lines)
 
-    # 🔥 KEY FIX: normalize text
-    full_text = re.sub(r'\n+', '\n', full_text)
+    i = 0
 
-    # Split using DATE as anchor
-    pattern = r'(\d{2} \w{3}, \d{4}\s+\d{2}:\d{2} [AP]M.*?)₹\s*([\d,]+\.\d+|\d+)'
+    while i < len(lines):
 
-    matches = re.findall(pattern, full_text, re.DOTALL)
+        line = lines[i]
 
-    for block, amount in matches:
+        # STEP 1: detect DATE
+        if re.match(r"\d{2} \w{3}, \d{4}", line):
 
-        try:
-            # Date + Time
-            dt_match = re.search(r'(\d{2} \w{3}, \d{4})\s+(\d{2}:\d{2} [AP]M)', block)
+            try:
+                date = pd.to_datetime(line, format="%d %b, %Y", errors="coerce")
 
-            if not dt_match:
+                # STEP 2: TIME
+                time = ""
+                if i+1 < len(lines) and re.search(r"\d{1,2}:\d{2}", lines[i+1]):
+                    time = lines[i+1]
+
+                txn_type = "Other"
+                description = "Unknown"
+                upi_id = ""
+                amount = None
+
+                j = i + 1
+
+                # STEP 3: walk until next transaction
+                while j < len(lines):
+
+                    current = lines[j]
+
+                    # Stop when next date found
+                    if j != i and re.match(r"\d{2} \w{3}, \d{4}", current):
+                        break
+
+                    # TYPE + NAME
+                    if "Paid to" in current:
+                        txn_type = "Debit"
+                        description = current.replace("Paid to", "").strip()
+
+                    elif "Received from" in current:
+                        txn_type = "Credit"
+                        description = current.replace("Received from", "").strip()
+
+                    elif "Self transfer" in current:
+                        txn_type = "Self"
+                        description = "Self Transfer"
+
+                    # UPI ID
+                    if "UPI Transaction ID" in current:
+                        upi_id = current.split(":")[-1].strip()
+
+                    # AMOUNT
+                    if "₹" in current:
+                        amt = re.sub(r"[^\d.]", "", current)
+                        if amt:
+                            amount = float(amt)
+
+                    j += 1
+
+                # SAVE only valid
+                if amount is not None:
+                    records.append({
+                        "Date": date,
+                        "Time": time,
+                        "Description": description,
+                        "Type": txn_type,
+                        "Amount": amount,
+                        "UPI_ID": upi_id
+                    })
+
+                i = j
                 continue
 
-            date = pd.to_datetime(dt_match.group(1), format="%d %b, %Y", errors="coerce")
-            time = dt_match.group(2)
+            except:
+                pass
 
-            # Type + Description
-            if "Paid to" in block:
-                txn_type = "Debit"
-                desc = re.search(r'Paid to (.*)', block)
-            elif "Received from" in block:
-                txn_type = "Credit"
-                desc = re.search(r'Received from (.*)', block)
-            else:
-                txn_type = "Other"
-                desc = None
-
-            description = desc.group(1).split("UPI")[0].strip() if desc else "Unknown"
-
-            # UPI ID
-            upi_match = re.search(r'UPI Transaction ID:\s*(\d+)', block)
-            upi_id = upi_match.group(1) if upi_match else ""
-
-            # Amount
-            amt = float(amount.replace(",", ""))
-
-            records.append({
-                "Date": date,
-                "Time": time,
-                "Description": description,
-                "Type": txn_type,
-                "Amount": amt,
-                "UPI_ID": upi_id
-            })
-
-        except:
-            continue
+        i += 1
 
     df = pd.DataFrame(records)
 
